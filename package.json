@@ -1,0 +1,32 @@
+{
+  "name": "duckdb-motherduck-obsidian-plugin",
+  "version": "0.0.2",
+  "description": "Obsidian plugin for DuckDB and MotherDuck. Query SQL inside notes, freeze results inline.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "postinstall": "patch-package"
+  },
+  "keywords": [
+    "obsidian",
+    "duckdb",
+    "motherduck",
+    "sql",
+    "wasm"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "^1.5.0",
+    "patch-package": "^8.0.1",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev45.0",
+    "@motherduck/wasm-client": "^0.8.1",
+    "apache-arrow": "^17.0.0"
+  }
+}
