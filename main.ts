@@ -7,6 +7,7 @@ import {
   PluginSettingTab,
   Setting,
   TFile,
+  setIcon,
 } from "obsidian";
 import { Row, Runtime } from "./src/runtime";
 import { DuckDBWasmRuntime } from "./src/runtime/duckdb";
@@ -14,14 +15,41 @@ import { MotherDuckRuntime } from "./src/runtime/motherduck";
 import { DUCKDB_ICON, MOTHERDUCK_ICON } from "./src/icons";
 
 type Connection = "local" | "cloud";
+type Cadence = "daily" | "weekly";
+
+const CADENCE_MS: Record<Cadence, number> = {
+  daily: 24 * 60 * 60 * 1000,
+  weekly: 7 * 24 * 60 * 60 * 1000,
+};
+
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const STARTUP_DELAY_MS = 5 * 1000; // delay before the first post-load sweep
+const LOG_CAP = 100;
+
+interface RefreshLogEntry {
+  ts: string; // ISO timestamp
+  path: string;
+  trigger: "schedule" | "manual";
+  blocks: number;
+  errored: number;
+  errorMessage?: string; // top-level error if the refresh threw before producing per-block counts
+}
 
 interface Settings {
   mdToken: string;
   dbPath: string;
   rowCap: number;
+  scheduleEnabled: boolean;
+  refreshLog: RefreshLogEntry[];
 }
 
-const DEFAULTS: Settings = { mdToken: "", dbPath: ":memory:", rowCap: 100 };
+const DEFAULTS: Settings = {
+  mdToken: "",
+  dbPath: ":memory:",
+  rowCap: 100,
+  scheduleEnabled: false,
+  refreshLog: [],
+};
 
 export default class MotherDuckPlugin extends Plugin {
   settings!: Settings;
@@ -30,6 +58,11 @@ export default class MotherDuckPlugin extends Plugin {
   // cloud one. Queries on different connections in the same note coexist.
   private localRuntime: Runtime | null = null;
   private cloudRuntime: Runtime | null = null;
+  // Scheduler state. `sweepInterval` is the setInterval ID (or null when the
+  // scheduler is off); `sweepRunning` prevents overlapping sweeps if a previous
+  // one is still working when the next interval fires.
+  private sweepInterval: number | null = null;
+  private sweepRunning = false;
   api!: {
     refreshFile: (path: string) => Promise<string>;
     runQuery: (sql: string, connection?: Connection) => Promise<{ rows: Row[]; columns: string[] }>;
@@ -90,10 +123,16 @@ export default class MotherDuckPlugin extends Plugin {
       refreshFile: (path: string) => this.refreshFile(path),
       runQuery: (sql: string, connection: Connection = "local") => this.runQuery(sql, connection),
     };
+
+    if (this.settings.scheduleEnabled) {
+      this.startScheduler();
+    }
+
     console.log("[motherduck] loaded");
   }
 
   async onunload() {
+    this.stopScheduler();
     await this.resetRuntimes();
   }
 
@@ -147,9 +186,243 @@ export default class MotherDuckPlugin extends Plugin {
     return rt.runQuery(sql);
   }
 
+  // Append a small <select> to the given parent, mapped to the host note's
+  // `duckdb-motherduck-refresh` frontmatter. None / Daily / Weekly. Selecting
+  // None removes the property; selecting a cadence sets it. Updates persist via
+  // Obsidian's processFrontMatter, which preserves YAML structure and other keys.
+  private attachRefreshDropdown(parent: HTMLElement, ctx: MarkdownPostProcessorContext) {
+    const sourcePath = ctx.sourcePath;
+    const file = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (!(file instanceof TFile)) return;
+
+    // Group the icon + dropdown together and right-align as a unit, so the
+    // icon is visually attached to the select rather than floating between
+    // the badge label and the picker.
+    const group = parent.createDiv();
+    group.style.marginLeft = "auto";
+    group.style.display = "flex";
+    group.style.alignItems = "center";
+    group.style.gap = "4px";
+
+    const iconHost = group.createDiv();
+    iconHost.style.display = "flex";
+    iconHost.style.alignItems = "center";
+    setIcon(iconHost, "refresh-cw");
+    const refreshSvg = iconHost.querySelector("svg");
+    if (refreshSvg) {
+      refreshSvg.setAttribute("width", "12");
+      refreshSvg.setAttribute("height", "12");
+    }
+
+    const select = group.createEl("select") as HTMLSelectElement;
+    select.style.fontSize = "0.85em";
+    select.title = "Auto-refresh this note (writes to its frontmatter)";
+
+    const opts: Array<{ value: "" | Cadence; label: string }> = [
+      { value: "", label: "Refresh: none" },
+      { value: "daily", label: "Refresh: daily" },
+      { value: "weekly", label: "Refresh: weekly" },
+    ];
+    for (const opt of opts) {
+      const o = select.createEl("option");
+      o.value = opt.value;
+      o.text = opt.label;
+    }
+
+    // Initialize from existing frontmatter.
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const current = fm?.["duckdb-motherduck-refresh"];
+    select.value = current === "daily" || current === "weekly" ? current : "";
+
+    select.addEventListener("change", async () => {
+      const v = select.value as "" | Cadence;
+      try {
+        await this.app.fileManager.processFrontMatter(file, (fmEdit) => {
+          if (v === "") {
+            delete fmEdit["duckdb-motherduck-refresh"];
+          } else {
+            fmEdit["duckdb-motherduck-refresh"] = v;
+          }
+        });
+      } catch (e) {
+        console.error("[motherduck] failed to update refresh cadence frontmatter", e);
+        new Notice("failed to update refresh cadence");
+      }
+    });
+  }
+
+  // ----------------- scheduler -----------------
+
+  startScheduler() {
+    if (this.sweepInterval !== null) return;
+    // Initial post-load sweep, after a short delay to let Obsidian finish booting.
+    window.setTimeout(() => {
+      void this.runScheduledSweep();
+    }, STARTUP_DELAY_MS);
+    // Then sweep at the regular interval.
+    this.sweepInterval = window.setInterval(() => {
+      void this.runScheduledSweep();
+    }, SWEEP_INTERVAL_MS);
+  }
+
+  stopScheduler() {
+    if (this.sweepInterval !== null) {
+      window.clearInterval(this.sweepInterval);
+      this.sweepInterval = null;
+    }
+  }
+
+  // Schedule-driven sweep: only opt-in notes (those with the
+  // `duckdb-motherduck-refresh` frontmatter property), respects each note's
+  // cadence so we only touch ones that are actually overdue. Updates
+  // `duckdb-motherduck-refresh-last` after each successful refresh so the
+  // next cadence window starts from now.
+  async runScheduledSweep(): Promise<{ refreshed: number; errored: number; checked: number }> {
+    return this.runSweepInternal({
+      trigger: "schedule",
+      candidates: this.discoverScheduledNotes(),
+      ignoreCadence: false,
+      stampLastOnSuccess: true,
+    });
+  }
+
+  // Manual sweep, the user clicked the button. Refreshes every note in the
+  // vault that contains a SQL block, regardless of frontmatter opt-in. Doesn't
+  // touch the last-refresh timestamp on notes that aren't opted in (they have
+  // no cadence, so a `last` value would be meaningless), but does update it on
+  // ones that are, so a manual click also resets their cadence window.
+  async runManualSweep(): Promise<{ refreshed: number; errored: number; checked: number }> {
+    const all = await this.discoverNotesWithBlocks();
+    const optedIn = new Set(this.discoverScheduledNotes().map((c) => c.file.path));
+    return this.runSweepInternal({
+      trigger: "manual",
+      candidates: all.map((file) => ({ file, cadence: null, lastRefresh: null })),
+      ignoreCadence: true,
+      stampLastOnSuccess: false,
+      stampPredicate: (file) => optedIn.has(file.path),
+    });
+  }
+
+  private async runSweepInternal(opts: {
+    trigger: "schedule" | "manual";
+    candidates: Array<{ file: TFile; cadence: Cadence | null; lastRefresh: string | null }>;
+    ignoreCadence: boolean;
+    stampLastOnSuccess: boolean;
+    stampPredicate?: (file: TFile) => boolean;
+  }): Promise<{ refreshed: number; errored: number; checked: number }> {
+    if (this.sweepRunning) {
+      console.log("[motherduck] sweep skipped: previous sweep still running");
+      return { refreshed: 0, errored: 0, checked: 0 };
+    }
+    this.sweepRunning = true;
+    let refreshed = 0;
+    let errored = 0;
+    let checked = 0;
+    try {
+      for (const { file, cadence, lastRefresh } of opts.candidates) {
+        checked++;
+        if (!opts.ignoreCadence && cadence && !isOverdue(cadence, lastRefresh)) continue;
+        // Don't stomp on a note the user is currently editing.
+        const activeFile = this.app.workspace.getActiveFile();
+        if (activeFile?.path === file.path) {
+          console.log(`[motherduck] sweep: skipping ${file.path}, active editor`);
+          continue;
+        }
+        try {
+          const result = await this.refreshFileDetailed(file.path);
+          const shouldStamp =
+            opts.stampLastOnSuccess || (opts.stampPredicate?.(file) ?? false);
+          if (shouldStamp) {
+            await this.app.fileManager.processFrontMatter(file, (fm) => {
+              fm["duckdb-motherduck-refresh-last"] = new Date().toISOString();
+            });
+          }
+          await this.appendLog({
+            ts: new Date().toISOString(),
+            path: file.path,
+            trigger: opts.trigger,
+            blocks: result.refreshed,
+            errored: result.errored,
+            errorMessage: result.firstError,
+          });
+          if (result.errored > 0) errored++;
+          else refreshed++;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`[motherduck] sweep: refresh failed for ${file.path}:`, e);
+          await this.appendLog({
+            ts: new Date().toISOString(),
+            path: file.path,
+            trigger: opts.trigger,
+            blocks: 0,
+            errored: 0,
+            errorMessage: msg,
+          });
+          errored++;
+          // Leave the last-refresh timestamp alone so the next sweep retries
+          // instead of waiting a full cadence.
+        }
+      }
+    } finally {
+      this.sweepRunning = false;
+    }
+    return { refreshed, errored, checked };
+  }
+
+  // Scan all markdown files for the opt-in frontmatter property. Reads from
+  // Obsidian's metadata cache (already-parsed), so this is sub-millisecond
+  // even on large vaults.
+  private discoverScheduledNotes(): Array<{
+    file: TFile;
+    cadence: Cadence;
+    lastRefresh: string | null;
+  }> {
+    const out: Array<{ file: TFile; cadence: Cadence; lastRefresh: string | null }> = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (!fm) continue;
+      const raw = fm["duckdb-motherduck-refresh"];
+      if (raw !== "daily" && raw !== "weekly") continue;
+      const lastRaw = fm["duckdb-motherduck-refresh-last"];
+      const lastRefresh = typeof lastRaw === "string" ? lastRaw : null;
+      out.push({ file, cadence: raw, lastRefresh });
+    }
+    return out;
+  }
+
+  // Scan every markdown file's source for at least one duckdb/motherduck
+  // fence. Reads each file (slower than discoverScheduledNotes which uses the
+  // metadata cache) but only fires on the manual button, where a
+  // few-seconds-once-per-click cost is acceptable.
+  private async discoverNotesWithBlocks(): Promise<TFile[]> {
+    const out: TFile[] = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const content = await this.app.vault.read(file);
+      if (/^```(motherduck|duckdb)\s*$/m.test(content)) {
+        out.push(file);
+      }
+    }
+    return out;
+  }
+
+  private async appendLog(entry: RefreshLogEntry) {
+    this.settings.refreshLog.unshift(entry);
+    if (this.settings.refreshLog.length > LOG_CAP) {
+      this.settings.refreshLog.length = LOG_CAP;
+    }
+    await this.saveSettings();
+  }
+
   // ----------------- freeze / refresh -----------------
 
   async refreshFile(path: string): Promise<string> {
+    const r = await this.refreshFileDetailed(path);
+    return `Refreshed ${r.refreshed} block(s), ${r.errored} error(s) in ${path}`;
+  }
+
+  async refreshFileDetailed(
+    path: string,
+  ): Promise<{ refreshed: number; errored: number; firstError?: string }> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) throw new Error(`not a file: ${path}`);
     const content = await this.app.vault.read(file);
@@ -157,7 +430,7 @@ export default class MotherDuckPlugin extends Plugin {
     if (result.newContent !== content) {
       await this.app.vault.modify(file, result.newContent);
     }
-    return `Refreshed ${result.refreshed} block(s), ${result.errored} error(s) in ${path}`;
+    return { refreshed: result.refreshed, errored: result.errored, firstError: result.firstError };
   }
 
   async freezeAtCursor(file: TFile, cursorLine: number): Promise<string> {
@@ -170,11 +443,14 @@ export default class MotherDuckPlugin extends Plugin {
     return `Froze 1 block`;
   }
 
-  async processAllBlocks(content: string): Promise<{ newContent: string; refreshed: number; errored: number }> {
+  async processAllBlocks(
+    content: string,
+  ): Promise<{ newContent: string; refreshed: number; errored: number; firstError?: string }> {
     const blocks = findBlocks(content);
     let working = content;
     let refreshed = 0;
     let errored = 0;
+    let firstError: string | undefined;
     // Process from last to first so line offsets stay valid as we mutate content
     for (let i = blocks.length - 1; i >= 0; i--) {
       try {
@@ -183,9 +459,10 @@ export default class MotherDuckPlugin extends Plugin {
       } catch (e) {
         console.error("[motherduck] block error", e);
         errored++;
+        if (!firstError) firstError = e instanceof Error ? e.message : String(e);
       }
     }
-    return { newContent: working, refreshed, errored };
+    return { newContent: working, refreshed, errored, firstError };
   }
 
   async freezeBlock(content: string, block: FencedBlock): Promise<string> {
@@ -234,6 +511,13 @@ export default class MotherDuckPlugin extends Plugin {
       badge.createEl("span", { text: "DuckDB " });
       badge.createEl("code", { text: shortPathLabel(this.settings.dbPath) });
     }
+
+    // Refresh-cadence dropdown, right-aligned in the badge row. Reads from and
+    // writes to the host note's `duckdb-motherduck-refresh` frontmatter so users
+    // don't have to learn the property name. Note-scoped, not block-scoped:
+    // changing it in one block updates the note's frontmatter and therefore
+    // every block in the note (other blocks pick up the change on next render).
+    this.attachRefreshDropdown(badge, ctx);
 
     const pre = wrap.createEl("pre");
     pre.style.margin = "0 0 8px 0";
@@ -358,6 +642,24 @@ function writeSentinelAfterBlock(content: string, block: FencedBlock, mdTable: s
 // Short-form display of the configured local DB path: keeps `:memory:` as-is
 // and strips directory parts off real paths / URIs so the block badge stays
 // compact (e.g. `opfs://notes.duckdb` -> `notes.duckdb`).
+// True if a note's `lastRefresh` timestamp is older than its cadence interval,
+// or if it's missing/unparseable (treat as never-refreshed and therefore due).
+function isOverdue(cadence: Cadence, lastRefresh: string | null): boolean {
+  if (!lastRefresh) return true;
+  const last = Date.parse(lastRefresh);
+  if (Number.isNaN(last)) return true;
+  return Date.now() - last >= CADENCE_MS[cadence];
+}
+
+// Friendly local-time render of an ISO timestamp for the activity log.
+function formatLogTimestamp(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
 function shortPathLabel(rawPath: string): string {
   const v = (rawPath || "").trim();
   if (!v || v === ":memory:") return ":memory:";
@@ -532,6 +834,119 @@ class SettingsTab extends PluginSettingTab {
             await this.plugin.resetRuntimes("cloud");
           });
       });
+
+    this.containerEl.createEl("h3", { text: "Scheduled refresh" });
+
+    const scheduleDesc = this.containerEl.createEl("p", { cls: "setting-item-description" });
+    scheduleDesc.appendText("Pick a cadence in the ");
+    scheduleDesc.createEl("code", { text: "Refresh" });
+    scheduleDesc.appendText(" dropdown above any SQL block to opt that note in. The plugin writes ");
+    scheduleDesc.createEl("code", { text: "duckdb-motherduck-refresh" });
+    scheduleDesc.appendText(
+      " to the note's frontmatter, sweeps once an hour while Obsidian is running, and refreshes overdue notes. The active editor is skipped to avoid stomping in-progress edits.",
+    );
+
+    new Setting(this.containerEl)
+      .setName("Auto-refresh scheduled notes")
+      .setDesc("When on, opted-in notes refresh automatically based on their cadence.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.scheduleEnabled).onChange(async (v) => {
+          this.plugin.settings.scheduleEnabled = v;
+          await this.plugin.saveSettings();
+          if (v) this.plugin.startScheduler();
+          else this.plugin.stopScheduler();
+        }),
+      );
+
+    new Setting(this.containerEl)
+      .setName("Refresh all notes with queries now")
+      .setDesc("Sweeps every note in the vault that has a SQL block, ignoring cadence and frontmatter opt-in. Available even when auto-refresh is off.")
+      .addButton((b) =>
+        b.setButtonText("Refresh now").onClick(async () => {
+          b.setDisabled(true);
+          b.setButtonText("Refreshing...");
+          try {
+            const r = await this.plugin.runManualSweep();
+            new Notice(
+              `Refreshed ${r.refreshed} note(s), ${r.errored} error(s), ${r.checked} scanned`,
+            );
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(`error: ${msg}`);
+          } finally {
+            b.setDisabled(false);
+            b.setButtonText("Refresh now");
+            this.display(); // re-render so the new log entries show up
+          }
+        }),
+      );
+
+    const logTitle = this.containerEl.createEl("h4", { text: "Activity log" });
+    logTitle.style.marginTop = "16px";
+    logTitle.style.marginBottom = "4px";
+
+    if (this.plugin.settings.refreshLog.length === 0) {
+      const empty = this.containerEl.createEl("p", { cls: "setting-item-description" });
+      empty.setText("No refreshes recorded yet.");
+    } else {
+      const logEl = this.containerEl.createDiv();
+      logEl.style.maxHeight = "300px";
+      logEl.style.overflowY = "auto";
+      logEl.style.border = "1px solid var(--background-modifier-border)";
+      logEl.style.borderRadius = "6px";
+      logEl.style.padding = "8px";
+      logEl.style.fontSize = "0.85em";
+      logEl.style.fontFamily = "var(--font-monospace)";
+      logEl.style.lineHeight = "1.5";
+
+      for (const entry of this.plugin.settings.refreshLog.slice(0, 30)) {
+        const row = logEl.createDiv();
+        const ts = row.createEl("span", { text: formatLogTimestamp(entry.ts) });
+        ts.style.opacity = "0.7";
+        row.appendText("  ");
+        const trigger = row.createEl("span", { text: entry.trigger });
+        trigger.style.opacity = "0.7";
+        row.appendText("  ");
+
+        const linkEl = row.createEl("a", { text: entry.path });
+        linkEl.style.cursor = "pointer";
+        linkEl.addEventListener("click", (e) => {
+          e.preventDefault();
+          const f = this.plugin.app.vault.getAbstractFileByPath(entry.path);
+          if (f instanceof TFile) {
+            this.plugin.app.workspace.getLeaf().openFile(f);
+          }
+        });
+
+        // Three shapes:
+        //   no errors       -> "N refreshed"
+        //   per-block errors -> "N refreshed, M errored: <first message>"
+        //   refresh threw   -> "error: <message>"
+        if (entry.blocks === 0 && entry.errored === 0 && entry.errorMessage) {
+          row.appendText("  ");
+          const err = row.createEl("span", { text: `error: ${entry.errorMessage}` });
+          err.style.color = "var(--text-error)";
+        } else {
+          row.appendText(`  ${entry.blocks} refreshed`);
+          if (entry.errored > 0) {
+            const err = row.createEl("span", {
+              text: entry.errorMessage
+                ? `, ${entry.errored} errored: ${entry.errorMessage}`
+                : `, ${entry.errored} errored`,
+            });
+            err.style.color = "var(--text-error)";
+          }
+        }
+      }
+
+      new Setting(this.containerEl).addButton((b) =>
+        b.setButtonText("Clear log").onClick(async () => {
+          this.plugin.settings.refreshLog = [];
+          await this.plugin.saveSettings();
+          this.display();
+        }),
+      );
+    }
 
     this.containerEl.createEl("h3", { text: "General" });
 
