@@ -58,9 +58,21 @@ export default class MotherDuckPlugin extends Plugin {
   // cloud one. Queries on different connections in the same note coexist.
   private localRuntime: Runtime | null = null;
   private cloudRuntime: Runtime | null = null;
+  private localRuntimePromise: Promise<Runtime> | null = null;
+  private cloudRuntimePromise: Promise<Runtime> | null = null;
+  private runtimeGeneration: Record<Connection, number> = {
+    local: 0,
+    cloud: 0,
+  };
+  private queryQueues: Record<Connection, Promise<unknown>> = {
+    local: Promise.resolve(),
+    cloud: Promise.resolve(),
+  };
+  private fileLocks = new Map<string, Promise<void>>();
   // Scheduler state. `sweepInterval` is the setInterval ID (or null when the
   // scheduler is off); `sweepRunning` prevents overlapping sweeps if a previous
   // one is still working when the next interval fires.
+  private sweepTimeout: number | null = null;
   private sweepInterval: number | null = null;
   private sweepRunning = false;
   api!: {
@@ -138,6 +150,9 @@ export default class MotherDuckPlugin extends Plugin {
 
   async resetRuntimes(only?: Connection) {
     if (!only || only === "local") {
+      this.runtimeGeneration.local++;
+      this.localRuntimePromise = null;
+      this.queryQueues.local = Promise.resolve();
       try {
         await this.localRuntime?.close();
       } catch (e) {
@@ -146,6 +161,9 @@ export default class MotherDuckPlugin extends Plugin {
       this.localRuntime = null;
     }
     if (!only || only === "cloud") {
+      this.runtimeGeneration.cloud++;
+      this.cloudRuntimePromise = null;
+      this.queryQueues.cloud = Promise.resolve();
       try {
         await this.cloudRuntime?.close();
       } catch (e) {
@@ -171,19 +189,70 @@ export default class MotherDuckPlugin extends Plugin {
         throw new Error("MotherDuck token not set. Configure it in plugin settings.");
       }
       if (this.cloudRuntime) return this.cloudRuntime;
-      this.cloudRuntime = new MotherDuckRuntime(this.settings.mdToken);
-      await this.cloudRuntime.init();
-      return this.cloudRuntime;
+      if (!this.cloudRuntimePromise) {
+        const rt = new MotherDuckRuntime(this.settings.mdToken);
+        const generation = this.runtimeGeneration.cloud;
+        this.cloudRuntimePromise = rt
+          .init()
+          .then(() => {
+            if (this.runtimeGeneration.cloud !== generation) {
+              void rt.close();
+              throw new Error("MotherDuck connection reset while initializing. Retry the query.");
+            }
+            this.cloudRuntime = rt;
+            return rt;
+          })
+          .catch(async (e) => {
+            await rt.close().catch((closeError) => {
+              console.error("[motherduck] close failed after cloud init error", closeError);
+            });
+            throw e;
+          })
+          .finally(() => {
+            this.cloudRuntimePromise = null;
+          });
+      }
+      return this.cloudRuntimePromise;
     }
     if (this.localRuntime) return this.localRuntime;
-    this.localRuntime = new DuckDBWasmRuntime(this.settings.dbPath);
-    await this.localRuntime.init();
-    return this.localRuntime;
+    if (!this.localRuntimePromise) {
+      const rt = new DuckDBWasmRuntime(this.settings.dbPath);
+      const generation = this.runtimeGeneration.local;
+      this.localRuntimePromise = rt
+        .init()
+          .then(() => {
+            if (this.runtimeGeneration.local !== generation) {
+              void rt.close();
+              throw new Error("DuckDB connection reset while initializing. Retry the query.");
+            }
+            this.localRuntime = rt;
+            return rt;
+          })
+          .catch(async (e) => {
+            await rt.close().catch((closeError) => {
+              console.error("[motherduck] close failed after local init error", closeError);
+            });
+            throw e;
+          })
+          .finally(() => {
+            this.localRuntimePromise = null;
+          });
+    }
+    return this.localRuntimePromise;
   }
 
   async runQuery(sql: string, connection: Connection): Promise<{ rows: Row[]; columns: string[] }> {
-    const rt = await this.getRuntime(connection);
-    return rt.runQuery(sql);
+    return this.enqueueQuery(connection, async () => {
+      const rt = await this.getRuntime(connection);
+      return rt.runQuery(sql);
+    });
+  }
+
+  private enqueueQuery<T>(connection: Connection, op: () => Promise<T>): Promise<T> {
+    const previous = this.queryQueues[connection].catch(() => undefined);
+    const next = previous.then(op);
+    this.queryQueues[connection] = next.catch(() => undefined);
+    return next;
   }
 
   // Append a small <select> to the given parent, mapped to the host note's
@@ -198,25 +267,14 @@ export default class MotherDuckPlugin extends Plugin {
     // Group the icon + dropdown together and right-align as a unit, so the
     // icon is visually attached to the select rather than floating between
     // the badge label and the picker.
-    const group = parent.createDiv();
-    group.style.marginLeft = "auto";
-    group.style.display = "flex";
-    group.style.alignItems = "center";
-    group.style.gap = "4px";
+    const group = parent.createDiv({ cls: "motherduck-refresh-control" });
 
-    const iconHost = group.createDiv();
-    iconHost.style.display = "flex";
-    iconHost.style.alignItems = "center";
+    const iconHost = group.createDiv({ cls: "motherduck-refresh-control__icon" });
     setIcon(iconHost, "refresh-cw");
-    const refreshSvg = iconHost.querySelector("svg");
-    if (refreshSvg) {
-      refreshSvg.setAttribute("width", "12");
-      refreshSvg.setAttribute("height", "12");
-    }
 
-    const select = group.createEl("select") as HTMLSelectElement;
-    select.style.fontSize = "0.85em";
+    const select = group.createEl("select", { cls: "motherduck-refresh-control__select" }) as HTMLSelectElement;
     select.title = "Auto-refresh this note (writes to its frontmatter)";
+    select.setAttr("aria-label", "Auto-refresh this note");
 
     const opts: Array<{ value: "" | Cadence; label: string }> = [
       { value: "", label: "Refresh: none" },
@@ -254,18 +312,25 @@ export default class MotherDuckPlugin extends Plugin {
   // ----------------- scheduler -----------------
 
   startScheduler() {
-    if (this.sweepInterval !== null) return;
+    if (this.sweepInterval !== null || this.sweepTimeout !== null) return;
     // Initial post-load sweep, after a short delay to let Obsidian finish booting.
-    window.setTimeout(() => {
-      void this.runScheduledSweep();
+    this.sweepTimeout = window.setTimeout(() => {
+      this.sweepTimeout = null;
+      if (this.settings.scheduleEnabled) void this.runScheduledSweep();
     }, STARTUP_DELAY_MS);
     // Then sweep at the regular interval.
-    this.sweepInterval = window.setInterval(() => {
-      void this.runScheduledSweep();
-    }, SWEEP_INTERVAL_MS);
+    this.sweepInterval = this.registerInterval(
+      window.setInterval(() => {
+        if (this.settings.scheduleEnabled) void this.runScheduledSweep();
+      }, SWEEP_INTERVAL_MS),
+    );
   }
 
   stopScheduler() {
+    if (this.sweepTimeout !== null) {
+      window.clearTimeout(this.sweepTimeout);
+      this.sweepTimeout = null;
+    }
     if (this.sweepInterval !== null) {
       window.clearInterval(this.sweepInterval);
       this.sweepInterval = null;
@@ -397,8 +462,8 @@ export default class MotherDuckPlugin extends Plugin {
   private async discoverNotesWithBlocks(): Promise<TFile[]> {
     const out: TFile[] = [];
     for (const file of this.app.vault.getMarkdownFiles()) {
-      const content = await this.app.vault.read(file);
-      if (/^```(motherduck|duckdb)\s*$/m.test(content)) {
+      const content = await this.app.vault.cachedRead(file);
+      if (findBlocks(content).length > 0) {
         out.push(file);
       }
     }
@@ -413,6 +478,36 @@ export default class MotherDuckPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  private async withFileLock<T>(path: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.fileLocks.get(path) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const next = previous.catch(() => undefined).then(() => gate);
+    this.fileLocks.set(path, next);
+    await previous.catch(() => undefined);
+
+    try {
+      return await task();
+    } finally {
+      release();
+      if (this.fileLocks.get(path) === next) this.fileLocks.delete(path);
+    }
+  }
+
+  private async modifyIfUnchanged(file: TFile, baseContent: string, newContent: string): Promise<boolean> {
+    if (newContent === baseContent) return false;
+    const latest = await this.app.vault.read(file);
+    if (latest !== baseContent) {
+      throw new Error(
+        `${file.path} changed while queries were running; not overwriting newer edits. Retry the refresh.`,
+      );
+    }
+    await this.app.vault.modify(file, newContent);
+    return true;
+  }
+
   // ----------------- freeze / refresh -----------------
 
   async refreshFile(path: string): Promise<string> {
@@ -423,24 +518,26 @@ export default class MotherDuckPlugin extends Plugin {
   async refreshFileDetailed(
     path: string,
   ): Promise<{ refreshed: number; errored: number; firstError?: string }> {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) throw new Error(`not a file: ${path}`);
-    const content = await this.app.vault.read(file);
-    const result = await this.processAllBlocks(content);
-    if (result.newContent !== content) {
-      await this.app.vault.modify(file, result.newContent);
-    }
-    return { refreshed: result.refreshed, errored: result.errored, firstError: result.firstError };
+    return this.withFileLock(path, async () => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) throw new Error(`not a file: ${path}`);
+      const content = await this.app.vault.read(file);
+      const result = await this.processAllBlocks(content);
+      await this.modifyIfUnchanged(file, content, result.newContent);
+      return { refreshed: result.refreshed, errored: result.errored, firstError: result.firstError };
+    });
   }
 
   async freezeAtCursor(file: TFile, cursorLine: number): Promise<string> {
-    const content = await this.app.vault.read(file);
-    const blocks = findBlocks(content);
-    const hit = blocks.find((b) => cursorLine >= b.startLine && cursorLine <= b.endLine);
-    if (!hit) throw new Error("no ```duckdb or ```motherduck block at cursor");
-    const newContent = await this.freezeBlock(content, hit);
-    if (newContent !== content) await this.app.vault.modify(file, newContent);
-    return `Froze 1 block`;
+    return this.withFileLock(file.path, async () => {
+      const content = await this.app.vault.read(file);
+      const blocks = findBlocks(content);
+      const hit = blocks.find((b) => cursorLine >= b.startLine && cursorLine <= b.endLine);
+      if (!hit) throw new Error("no ```duckdb or ```motherduck block at cursor");
+      const newContent = await this.freezeBlock(content, hit);
+      await this.modifyIfUnchanged(file, content, newContent);
+      return `Froze 1 block`;
+    });
   }
 
   async processAllBlocks(
@@ -467,7 +564,13 @@ export default class MotherDuckPlugin extends Plugin {
 
   async freezeBlock(content: string, block: FencedBlock): Promise<string> {
     const { rows, columns } = await this.runQuery(block.sql, block.connection);
-    const mdTable = renderMarkdownTable(rows, columns, block.sql, this.settings.rowCap);
+    const mdTable = renderMarkdownTable(
+      rows,
+      columns,
+      block.sql,
+      block.connection,
+      this.settings.rowCap,
+    );
     return writeSentinelAfterBlock(content, block, mdTable);
   }
 
@@ -481,30 +584,13 @@ export default class MotherDuckPlugin extends Plugin {
     }
 
     const wrap = el.createDiv({ cls: "motherduck-block" });
-    wrap.style.border = "1px solid var(--background-modifier-border)";
-    wrap.style.borderRadius = "6px";
-    wrap.style.padding = "10px";
-    wrap.style.margin = "8px 0";
 
     // Connection badge above the SQL: tells the reader at a glance whether
     // this block hits the local DuckDB or MotherDuck cloud, mapping 1:1 to
     // the section names in plugin settings.
-    const badge = wrap.createDiv();
-    badge.style.display = "flex";
-    badge.style.alignItems = "center";
-    badge.style.gap = "6px";
-    badge.style.fontSize = "0.8em";
-    badge.style.opacity = "0.75";
-    badge.style.marginBottom = "6px";
-    const iconWrap = badge.createDiv();
-    iconWrap.style.display = "flex";
-    iconWrap.style.alignItems = "center";
+    const badge = wrap.createDiv({ cls: "motherduck-block__badge" });
+    const iconWrap = badge.createDiv({ cls: "motherduck-block__engine-icon" });
     iconWrap.innerHTML = connection === "cloud" ? MOTHERDUCK_ICON : DUCKDB_ICON;
-    const svg = iconWrap.querySelector("svg");
-    if (svg) {
-      svg.setAttribute("width", "14");
-      svg.setAttribute("height", "14");
-    }
     if (connection === "cloud") {
       badge.createEl("span", { text: "MotherDuck" });
     } else {
@@ -519,30 +605,32 @@ export default class MotherDuckPlugin extends Plugin {
     // every block in the note (other blocks pick up the change on next render).
     this.attachRefreshDropdown(badge, ctx);
 
-    const pre = wrap.createEl("pre");
-    pre.style.margin = "0 0 8px 0";
-    pre.style.fontSize = "0.85em";
+    const pre = wrap.createEl("pre", { cls: "motherduck-block__sql" });
     pre.createEl("code", { text: sql });
 
-    const btnRow = wrap.createDiv();
-    btnRow.style.display = "flex";
-    btnRow.style.gap = "8px";
-    btnRow.style.alignItems = "center";
+    const btnRow = wrap.createDiv({ cls: "motherduck-block__controls" });
 
-    const runBtn = btnRow.createEl("button", { text: "▶ Run" });
-    const freezeBtn = btnRow.createEl("button", { text: "📌 Freeze" });
-    const status = btnRow.createEl("span");
-    status.style.fontSize = "0.85em";
-    status.style.opacity = "0.7";
+    const runBtn = btnRow.createEl("button", { cls: "motherduck-block__button" });
+    setIcon(runBtn, "play");
+    runBtn.appendText("Run");
+    runBtn.title = "Run query";
+    runBtn.setAttr("aria-label", "Run query");
 
-    const resultEl = wrap.createDiv();
-    resultEl.style.marginTop = "8px";
-    resultEl.style.overflowX = "auto";
+    const freezeBtn = btnRow.createEl("button", { cls: "motherduck-block__button" });
+    setIcon(freezeBtn, "pin");
+    freezeBtn.appendText("Freeze");
+    freezeBtn.title = "Run and freeze result below this block";
+    freezeBtn.setAttr("aria-label", "Run and freeze result below this block");
+
+    const status = btnRow.createEl("span", { cls: "motherduck-block__status" });
+
+    const resultEl = wrap.createDiv({ cls: "motherduck-block__result" });
 
     runBtn.addEventListener("click", async () => {
       resultEl.empty();
       status.setText("running…");
       runBtn.setAttr("disabled", "true");
+      freezeBtn.setAttr("disabled", "true");
       const t0 = performance.now();
       try {
         const { rows, columns } = await this.runQuery(sql, connection);
@@ -552,33 +640,40 @@ export default class MotherDuckPlugin extends Plugin {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         status.setText("error");
-        const errEl = resultEl.createEl("pre");
-        errEl.style.color = "var(--text-error)";
-        errEl.style.whiteSpace = "pre-wrap";
+        const errEl = resultEl.createEl("pre", { cls: "motherduck-block__error" });
         errEl.setText(msg);
       } finally {
         runBtn.removeAttribute("disabled");
+        freezeBtn.removeAttribute("disabled");
       }
     });
 
     freezeBtn.addEventListener("click", async () => {
       status.setText("freezing…");
+      runBtn.setAttr("disabled", "true");
       freezeBtn.setAttr("disabled", "true");
       try {
-        const file = this.app.workspace.getActiveFile();
-        if (!file) throw new Error("no active file");
-        const info = ctx.getSectionInfo(el);
-        if (!info) throw new Error("cannot locate block position");
-        const content = await this.app.vault.read(file);
-        const block: FencedBlock = { sql, startLine: info.lineStart, endLine: info.lineEnd, connection };
-        const newContent = await this.freezeBlock(content, block);
-        if (newContent !== content) await this.app.vault.modify(file, newContent);
+        const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+        if (!(file instanceof TFile)) throw new Error(`not a file: ${ctx.sourcePath}`);
+        await this.withFileLock(file.path, async () => {
+          const info = ctx.getSectionInfo(el);
+          if (!info) throw new Error("cannot locate block position");
+          const content = await this.app.vault.read(file);
+          const block =
+            findBlocks(content).find(
+              (candidate) =>
+                candidate.startLine === info.lineStart && candidate.endLine === info.lineEnd,
+            ) ?? { sql, startLine: info.lineStart, endLine: info.lineEnd, connection };
+          const newContent = await this.freezeBlock(content, block);
+          await this.modifyIfUnchanged(file, content, newContent);
+        });
         status.setText("frozen ✓");
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         status.setText(`error: ${msg}`);
         console.error("[motherduck] freeze failed", e);
       } finally {
+        runBtn.removeAttribute("disabled");
         freezeBtn.removeAttribute("disabled");
       }
     });
@@ -599,13 +694,16 @@ function findBlocks(content: string): FencedBlock[] {
   const blocks: FencedBlock[] = [];
   let i = 0;
   while (i < lines.length) {
-    const open = lines[i].match(/^```(motherduck|duckdb)\s*$/);
+    const open = lines[i].match(/^ {0,3}(`{3,}|~{3,})\s*(motherduck|duckdb)(?:\s+.*)?$/);
     if (open) {
-      const connection: Connection = open[1] === "duckdb" ? "local" : "cloud";
+      const fence = open[1];
+      const fenceChar = fence[0];
+      const closeRe = new RegExp(`^ {0,3}${escapeRegExp(fenceChar)}{${fence.length},}\\s*$`);
+      const connection: Connection = open[2] === "duckdb" ? "local" : "cloud";
       const start = i;
       i++;
       const sqlLines: string[] = [];
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+      while (i < lines.length && !closeRe.test(lines[i])) {
         sqlLines.push(lines[i]);
         i++;
       }
@@ -618,6 +716,10 @@ function findBlocks(content: string): FencedBlock[] {
     }
   }
   return blocks;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function writeSentinelAfterBlock(content: string, block: FencedBlock, mdTable: string): string {
@@ -679,63 +781,74 @@ function escapeCell(v: unknown): string {
   return s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ").replace(/\r/g, "");
 }
 
-function renderMarkdownTable(rows: Row[], columns: string[], sql: string, rowCap: number): string {
-  const hash = simpleHash(sql.trim());
+function renderMarkdownTable(
+  rows: Row[],
+  columns: string[],
+  sql: string,
+  connection: Connection,
+  rowCap: number,
+): string {
+  const hash = simpleHash(`${connection}\n${sql.trim()}`);
   const ts = new Date().toISOString();
   const totalRows = rows.length;
-  const shown = rows.slice(0, rowCap);
+  const cap = normalizedRowCap(rowCap);
+  const shown = rows.slice(0, cap);
 
-  const open = `<!-- md:cache hash=${hash} ts=${ts} rows=${totalRows} -->`;
+  const open = `<!-- md:cache hash=${hash} conn=${connection} ts=${ts} rows=${totalRows} -->`;
   const close = `<!-- md:cache-end -->`;
 
-  if (totalRows === 0 || columns.length === 0) {
+  if (columns.length === 0) {
     return `${open}\n\n_(0 rows)_\n\n${close}`;
   }
-  const header = "| " + columns.join(" | ") + " |";
+  const header = "| " + columns.map(escapeCell).join(" | ") + " |";
   const sep = "| " + columns.map(() => "---").join(" | ") + " |";
   const body = shown.map((r) => "| " + columns.map((c) => escapeCell(r[c])).join(" | ") + " |");
   const truncated =
-    totalRows > rowCap ? `\n\n> … ${totalRows - rowCap} more rows hidden (cap ${rowCap})` : "";
+    totalRows > cap ? `\n\n> … ${totalRows - cap} more rows hidden (cap ${cap})` : "";
+  const emptyNotice = totalRows === 0 ? "\n\n> 0 rows" : "";
   // Blank lines around the table + around the sentinel comments are required
   // so markdown parsers don't fuse them into a single HTML block and skip table rendering.
-  return `${open}\n\n${header}\n${sep}\n${body.join("\n")}${truncated}\n\n${close}`;
+  return `${open}\n\n${header}\n${sep}\n${body.join("\n")}${emptyNotice}${truncated}\n\n${close}`;
 }
 
 function renderDomTable(parent: HTMLElement, rows: Row[], columns: string[], rowCap: number) {
-  if (rows.length === 0) {
+  if (columns.length === 0) {
     parent.createEl("em", { text: "(0 rows)" });
     return;
   }
-  const shown = rows.slice(0, rowCap);
-  const table = parent.createEl("table");
-  table.style.borderCollapse = "collapse";
-  table.style.fontSize = "0.85em";
+  const cap = normalizedRowCap(rowCap);
+  const shown = rows.slice(0, cap);
+  const table = parent.createEl("table", { cls: "motherduck-result-table" });
   const thead = table.createEl("thead").createEl("tr");
   for (const c of columns) {
     const th = thead.createEl("th", { text: c });
-    th.style.borderBottom = "1px solid var(--background-modifier-border)";
-    th.style.padding = "4px 8px";
-    th.style.textAlign = "left";
   }
   const tbody = table.createEl("tbody");
   for (const row of shown) {
     const tr = tbody.createEl("tr");
     for (const c of columns) {
       const td = tr.createEl("td");
-      td.style.borderBottom = "1px solid var(--background-modifier-border)";
-      td.style.padding = "4px 8px";
       const v = row[c];
       td.setText(v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
     }
   }
-  if (rows.length > rowCap) {
+  if (rows.length === 0) {
+    const empty = parent.createEl("div", { cls: "motherduck-muted", text: "0 rows" });
+    empty.style.marginTop = "4px";
+  }
+  if (rows.length > cap) {
     const more = parent.createEl("div", {
-      text: `… ${rows.length - rowCap} more rows hidden (cap ${rowCap})`,
+      cls: "motherduck-muted",
+      text: `… ${rows.length - cap} more rows hidden (cap ${cap})`,
     });
-    more.style.opacity = "0.7";
-    more.style.fontSize = "0.85em";
     more.style.marginTop = "4px";
   }
+}
+
+function normalizedRowCap(rowCap: number): number {
+  return Number.isFinite(rowCap) && rowCap > 0
+    ? Math.min(Math.floor(rowCap), 10000)
+    : DEFAULTS.rowCap;
 }
 
 // ----------------- settings tab -----------------
@@ -789,6 +902,26 @@ class SettingsTab extends PluginSettingTab {
           }),
       );
 
+    new Setting(this.containerEl)
+      .setName("Test DuckDB connection")
+      .setDesc("Runs a tiny local query using the current DuckDB setting.")
+      .addButton((b) =>
+        b.setButtonText("Test").onClick(async () => {
+          b.setDisabled(true);
+          b.setButtonText("Testing...");
+          try {
+            const result = await this.plugin.runQuery("SELECT 42 AS ok", "local");
+            new Notice(`DuckDB ok (${result.rows.length} row)`);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(`DuckDB error: ${msg}`);
+          } finally {
+            b.setDisabled(false);
+            b.setButtonText("Test");
+          }
+        }),
+      );
+
     renderSectionHeader(this.containerEl, MOTHERDUCK_ICON, "MotherDuck", {
       text: "Used by ```motherduck code blocks. ",
       linkText: "motherduck.com",
@@ -834,6 +967,26 @@ class SettingsTab extends PluginSettingTab {
             await this.plugin.resetRuntimes("cloud");
           });
       });
+
+    new Setting(this.containerEl)
+      .setName("Test MotherDuck connection")
+      .setDesc("Runs a tiny cloud query using the current token.")
+      .addButton((b) =>
+        b.setButtonText("Test").onClick(async () => {
+          b.setDisabled(true);
+          b.setButtonText("Testing...");
+          try {
+            const result = await this.plugin.runQuery("SELECT 42 AS ok", "cloud");
+            new Notice(`MotherDuck ok (${result.rows.length} row)`);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(`MotherDuck error: ${msg}`);
+          } finally {
+            b.setDisabled(false);
+            b.setButtonText("Test");
+          }
+        }),
+      );
 
     this.containerEl.createEl("h3", { text: "Scheduled refresh" });
 
@@ -960,7 +1113,7 @@ class SettingsTab extends PluginSettingTab {
           .onChange(async (v) => {
             const n = parseInt(v, 10);
             if (!Number.isNaN(n) && n > 0) {
-              this.plugin.settings.rowCap = n;
+              this.plugin.settings.rowCap = Math.min(Math.floor(n), 10000);
               await this.plugin.saveSettings();
             }
           }),
