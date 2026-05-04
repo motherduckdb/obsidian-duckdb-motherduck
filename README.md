@@ -9,6 +9,7 @@ Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query y
 - **`duckdb` / `motherduck` code blocks**: render a SQL panel in reading mode with a ▶ Run button and a connection badge showing which engine the block runs against.
 - **Freeze**: "Freeze query at cursor" or the 📌 button in reading mode runs the query and writes the result as a markdown table directly below the block, bracketed by sentinel comments.
 - **Refresh**: "Refresh all queries in this note" re-runs every frozen block. Unchanged SQL keeps its cached output; edited SQL re-runs.
+- **Scheduled refresh**: pick a daily / weekly cadence per note via the per-block dropdown; the plugin sweeps once an hour while Obsidian runs and refreshes overdue notes automatically. Activity log + manual "Refresh now" button in plugin settings.
 - **Plugin API**: `app.plugins.getPlugin('duckdb-motherduck').api.refreshFile(path)` and `.runQuery(sql, connection?)` (where `connection` is `"local"` or `"cloud"`, defaulting to `"local"`), so Claude Code or other agents can trigger refreshes via `obsidian eval`.
 
 ## Freeze format
@@ -37,6 +38,14 @@ Each block picks its backend via the fence type. Both connections can be configu
 | ---------------- | ------------------------- | ----------- | ------------- |
 | ` ```duckdb `    | `@duckdb/duckdb-wasm`     | no          | no            |
 | ` ```motherduck `| `@motherduck/wasm-client` | yes         | yes           |
+
+A rendered local block:
+
+![Rendered DuckDB block](docs/images/duckdb_cell.png)
+
+A rendered cloud block:
+
+![Rendered MotherDuck block](docs/images/motherduck_cell.png)
 
 Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** setting:
 
@@ -69,7 +78,7 @@ SELECT current_database(), current_timestamp
 ```
 ````
 
-In reading mode each block shows its connection badge (`DuckDB :memory:` or `MotherDuck`) and the ▶ Run / 📌 Freeze buttons.
+In reading mode each block shows its connection badge (`DuckDB :memory:` or `MotherDuck`), a `Refresh: none / daily / weekly` dropdown for scheduled refresh (see below), and the ▶ Run / 📌 Freeze buttons.
 
 From the command palette:
 
@@ -79,9 +88,30 @@ From the command palette:
 
 ## Settings
 
+![Plugin settings](docs/images/settings_page.png)
+
 - **DuckDB → Path to local DuckDB file**: `:memory:` (default), an OPFS bare filename, or an absolute file path. See *Connections* above.
 - **MotherDuck → Token**: optional. Stored plaintext in the plugin's `data.json` (see *Security* below). Prefer a [service account token](https://motherduck.com/docs/key-tasks/service-accounts-guide/create-and-configure-service-accounts/) for scoped, individually revocable access; or a [personal access token](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/authenticating-to-motherduck/#authentication-using-an-access-token) for quick experimentation.
+- **Scheduled refresh**: see the next section.
 - **General → Row cap**: max rows rendered inline or written into a frozen table. A truncation notice is appended if exceeded.
+
+## Scheduled refresh
+
+Pick a cadence in the **Refresh** dropdown above any SQL block to opt that note in for auto-refresh. The plugin writes a `duckdb-motherduck-refresh: daily | weekly` property to the note's frontmatter:
+
+```yaml
+---
+duckdb-motherduck-refresh: daily
+duckdb-motherduck-refresh-last: 2026-05-04T10:30:00Z   # plugin-managed
+---
+```
+
+While Obsidian is running and the **Auto-refresh scheduled notes** toggle is on, the plugin sweeps once an hour. Notes whose `last - now` exceeds their cadence get their frozen tables re-materialized. The active editor is skipped to avoid stomping in-progress edits.
+
+The settings page also has:
+
+- A **Refresh now** button: forces a sweep of *every note in the vault that has a SQL block*, regardless of cadence or frontmatter opt-in. Useful before reading a dashboard, or for one-shot refreshes.
+- An **Activity log** showing the last 100 refresh attempts (timestamp, trigger, path, blocks refreshed, first error message if any). Click a path to open the note. **Clear log** wipes history.
 
 ## Agent trigger
 
@@ -131,6 +161,7 @@ Queries run locally (`duckdb` blocks) or against your MotherDuck account (`mothe
 
 - **No mobile validation**, the architecture should work in mobile Obsidian for `:memory:` and OPFS modes, but hasn't been tested on iOS/Android. Absolute-path mode requires Node integration which isn't available on mobile.
 - **Read-only for on-disk files**, pointing at a real `.duckdb` file lets you query it, but writes (`CREATE` / `INSERT` / `UPDATE`) succeed only inside the worker and don't persist back to the file.
+- **Scheduled refresh runs only while Obsidian is open.** If you want notes refreshed while your laptop is asleep or Obsidian is closed, you need an external trigger (e.g. cron + the Obsidian CLI calling the plugin's API).
 - **No keychain integration for the MotherDuck token**, stored plaintext in `data.json`. See *Security*.
 
 ## License
