@@ -1,5 +1,5 @@
 import { MDConnection } from "@motherduck/wasm-client";
-import { Row, QueryResult, Runtime } from "./index";
+import { Row, QueryResult, Runtime, normalizeValue } from "./index";
 
 export class MotherDuckRuntime implements Runtime {
   private connection: MDConnection | null = null;
@@ -27,8 +27,12 @@ export class MotherDuckRuntime implements Runtime {
       const err = (result as { err?: { message?: string } }).err;
       throw new Error(err?.message ?? JSON.stringify(err));
     }
-    const rows = result.result.data.toRows() as Row[];
-    const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+    const columns = [...result.result.data.deduplicatedColumnNames()];
+    const rows = result.result.data.toRows().map((row) => {
+      const out: Row = {};
+      for (const column of columns) out[column] = normalizeValue(row[column]);
+      return out;
+    });
     return { rows, columns };
   }
 

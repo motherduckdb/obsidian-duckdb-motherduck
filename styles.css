@@ -1,0 +1,113 @@
+.motherduck-block {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px;
+  margin: 8px 0;
+  background: var(--background-primary);
+}
+
+.motherduck-block__badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.motherduck-block__engine-icon,
+.motherduck-refresh-control__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.motherduck-block__engine-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.motherduck-refresh-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.motherduck-refresh-control__icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.motherduck-refresh-control__select {
+  max-width: 150px;
+  font-size: var(--font-ui-smaller);
+}
+
+.motherduck-block__sql {
+  margin: 0 0 8px;
+  overflow-x: auto;
+  font-size: var(--font-ui-smaller);
+}
+
+.motherduck-block__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.motherduck-block__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--input-height);
+}
+
+.motherduck-block__button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.motherduck-block__status,
+.motherduck-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.motherduck-block__result {
+  margin-top: 8px;
+  overflow-x: auto;
+}
+
+.motherduck-block__error {
+  color: var(--text-error);
+  white-space: pre-wrap;
+}
+
+.motherduck-result-table {
+  border-collapse: collapse;
+  font-size: var(--font-ui-smaller);
+}
+
+.motherduck-result-table th,
+.motherduck-result-table td {
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+@media (max-width: 520px) {
+  .motherduck-block__badge {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .motherduck-refresh-control {
+    width: 100%;
+    margin-left: 0;
+  }
+}
