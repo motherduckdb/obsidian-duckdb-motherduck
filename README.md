@@ -8,7 +8,7 @@ Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query y
 
 - **`duckdb` / `motherduck` code blocks**: render a SQL panel in reading mode with a ▶ Run button and a connection badge showing which engine the block runs against.
 - **Freeze**: "Freeze query at cursor" or the 📌 button in reading mode runs the query and writes the result as a markdown table directly below the block, bracketed by sentinel comments.
-- **Refresh**: "Refresh all queries in this note" re-runs every frozen block. Unchanged SQL keeps its cached output; edited SQL re-runs.
+- **Refresh**: "Refresh all queries in this note" re-runs every SQL block and replaces its frozen output.
 - **Scheduled refresh**: pick a daily / weekly cadence per note via the per-block dropdown; the plugin sweeps once an hour while Obsidian runs and refreshes overdue notes automatically. Activity log + manual "Refresh now" button in plugin settings.
 - **Plugin API**: `app.plugins.getPlugin('duckdb-motherduck').api.refreshFile(path)` and `.runQuery(sql, connection?)` (where `connection` is `"local"` or `"cloud"`, defaulting to `"local"`), so Claude Code or other agents can trigger refreshes via `obsidian eval`.
 
@@ -18,7 +18,7 @@ Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query y
 ```motherduck
 SELECT brand, SUM(revenue) FROM sales GROUP BY 1 ORDER BY 2 DESC LIMIT 10
 ```
-<!-- md:cache hash=a3f847b2 ts=2026-04-24T14:22:00Z rows=10 -->
+<!-- md:cache hash=a3f847b2 conn=cloud ts=2026-04-24T14:22:00Z rows=10 -->
 
 | brand | sum(revenue) |
 | ----- | ------------ |
@@ -28,7 +28,7 @@ SELECT brand, SUM(revenue) FROM sales GROUP BY 1 ORDER BY 2 DESC LIMIT 10
 <!-- md:cache-end -->
 ````
 
-The sentinel carries a SQL hash, timestamp, and row count. Editing the SQL changes the hash, the next refresh re-runs that block. Leaving it alone keeps the cache.
+The sentinel carries a query hash, connection, timestamp, and row count. Refresh/freeze replaces the sentinel block below the query.
 
 ## Connections
 
@@ -59,7 +59,7 @@ The plugin isn't in the Obsidian community store yet. To install:
 
 1. Clone this repo.
 2. `npm install && npm run build`, produces `main.js`.
-3. Copy `main.js` and `manifest.json` into `<your-vault>/.obsidian/plugins/duckdb-motherduck/`.
+3. Copy `main.js`, `manifest.json`, and `styles.css` into `<your-vault>/.obsidian/plugins/duckdb-motherduck/`.
 4. In Obsidian: Settings → Community plugins → enable *DuckDB & MotherDuck*.
 
 ## Usage
@@ -127,6 +127,7 @@ obsidian eval code="app.plugins.getPlugin('duckdb-motherduck').api.refreshFile('
 
 ```sh
 npm install
+npm test         # automated unit tests for parser/cache/table helpers
 npm run build     # production bundle, main.js
 npm run dev       # watch mode, rebuilds on save
 ```
