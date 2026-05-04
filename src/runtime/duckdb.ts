@@ -7,7 +7,7 @@ import {
 } from "@duckdb/duckdb-wasm";
 import workerEh from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js";
 import workerMvp from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js";
-import { Row, QueryResult, Runtime } from "./index";
+import { Row, QueryResult, Runtime, normalizeValue } from "./index";
 
 // Electron's renderer exposes Node's `require`. Used to read real disk files
 // for read-only queries via DuckDB-Wasm's registerFileBuffer. Not available
@@ -144,7 +144,7 @@ export class DuckDBWasmRuntime implements Runtime {
     const columns = table.schema.fields.map((f) => f.name);
     const rows: Row[] = table.toArray().map((r: Record<string, unknown>) => {
       const obj: Row = {};
-      for (const c of columns) obj[c] = normalize(r[c]);
+      for (const c of columns) obj[c] = normalizeValue(r[c]);
       return obj;
     });
     return { rows, columns };
@@ -161,14 +161,4 @@ export class DuckDBWasmRuntime implements Runtime {
       this.workerUrl = null;
     }
   }
-}
-
-// Arrow types don't JSON-serialize cleanly. Coerce BigInt, Date, and TypedArrays
-// to plain values so renderers and the sentinel hash stay stable.
-function normalize(v: unknown): unknown {
-  if (v === null || v === undefined) return v;
-  if (typeof v === "bigint") return v.toString();
-  if (v instanceof Date) return v.toISOString();
-  if (v instanceof Uint8Array) return `<${v.length} bytes>`;
-  return v;
 }
