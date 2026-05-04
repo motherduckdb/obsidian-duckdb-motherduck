@@ -1,11 +1,26 @@
-import { AsyncDuckDB, ConsoleLogger, selectBundle, DuckDBBundles } from "@duckdb/duckdb-wasm";
+import {
+  AsyncDuckDB,
+  ConsoleLogger,
+  selectBundle,
+  DuckDBBundles,
+  DuckDBAccessMode,
+} from "@duckdb/duckdb-wasm";
 import workerEh from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js";
 import workerMvp from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js";
 import { Row, QueryResult, Runtime } from "./index";
 
+// Electron's renderer exposes Node's `require`. Used to read real disk files
+// for read-only queries via DuckDB-Wasm's registerFileBuffer. Not available
+// in browsers / mobile Obsidian, in which case file:// paths will surface a
+// clear error to the user.
+const NODE_REQUIRE: ((mod: string) => unknown) | null =
+  typeof (globalThis as unknown as { require?: unknown }).require === "function"
+    ? ((globalThis as unknown as { require: (m: string) => unknown }).require)
+    : null;
+
 // Pin to a known-good version; the .wasm binaries are fetched from jsDelivr at
 // runtime (too large to bundle into main.js).
-const DUCKDB_WASM_VERSION = "1.33.1-dev45.0";
+const DUCKDB_WASM_VERSION = "1.33.1-dev50.0";
 const CDN_BASE = `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@${DUCKDB_WASM_VERSION}/dist`;
 
 // Electron's renderer workers expose `process` (Node integration). Libraries
@@ -27,8 +42,31 @@ export class DuckDBWasmRuntime implements Runtime {
 
   constructor(private dbPath: string = ":memory:") {}
 
+  // Classify the user input into one of three runtime shapes. Tagged union
+  // rather than a single string so the disk-path branch is a typed thing all
+  // the way through, no string-prefix sniffing later.
+  //   memory   - in-memory ephemeral
+  //   uri      - any scheme DuckDB-Wasm understands directly (`opfs://`,
+  //              `https://`, ...). Bare filenames are auto-prefixed `opfs://`
+  //              for backwards compat; not advertised in the UI.
+  //   disk     - native filesystem path on the host. Read-only ingest via
+  //              Node's fs into a registered file buffer.
+  private resolvedPath():
+    | { kind: "memory" }
+    | { kind: "uri"; uri: string }
+    | { kind: "disk"; path: string } {
+    const v = (this.dbPath || "").trim();
+    if (!v || v === ":memory:") return { kind: "memory" };
+    if (v.startsWith("file://")) return { kind: "disk", path: v };
+    // Unix absolute (`/foo/bar`) or Windows drive-letter (`C:\…` or `C:/…`).
+    if (v.startsWith("/") || /^[A-Za-z]:[\\/]/.test(v)) return { kind: "disk", path: v };
+    if (v.includes("://")) return { kind: "uri", uri: v };
+    return { kind: "uri", uri: `opfs://${v}` };
+  }
+
   label() {
-    return this.dbPath === ":memory:" ? "DuckDB WASM (memory)" : `DuckDB WASM (${this.dbPath})`;
+    const v = (this.dbPath || "").trim();
+    return !v || v === ":memory:" ? "DuckDB WASM (memory)" : `DuckDB WASM (${v})`;
   }
 
   async init(): Promise<void> {
@@ -51,9 +89,52 @@ export class DuckDBWasmRuntime implements Runtime {
     const logger = new ConsoleLogger();
     this.db = new AsyncDuckDB(logger, worker);
     await this.db.instantiate(bundle.mainModule);
-    if (this.dbPath && this.dbPath !== ":memory:") {
-      await this.db.open({ path: this.dbPath });
+
+    const resolved = this.resolvedPath();
+    if (resolved.kind === "uri") {
+      await this.db.open({ path: resolved.uri });
+    } else if (resolved.kind === "disk") {
+      // Real disk file: read once via Electron's Node integration, register the
+      // bytes as a virtual file inside the worker, open read-only. Writes from
+      // SQL stay in the worker and are discarded on close, they don't make it
+      // back to the on-disk file. Cross-platform handling via Node's `url`
+      // and `path` rather than hand-rolling the file:// to native conversion
+      // (which would mishandle `file:///C:/…` on Windows and `\` separators).
+      if (!NODE_REQUIRE) {
+        throw new Error(
+          "Real filesystem paths require Node integration (Electron desktop). " +
+            "Use `:memory:` or a bare filename instead.",
+        );
+      }
+      const fs = NODE_REQUIRE("fs") as typeof import("fs");
+      const url = NODE_REQUIRE("url") as typeof import("url");
+      const path = NODE_REQUIRE("path") as typeof import("path");
+
+      let realPath: string;
+      if (resolved.path.startsWith("file://")) {
+        try {
+          realPath = url.fileURLToPath(resolved.path);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(`Invalid file:// URL '${resolved.path}': ${msg}`);
+        }
+      } else {
+        realPath = resolved.path;
+      }
+
+      let bytes: Uint8Array;
+      try {
+        const buf = await fs.promises.readFile(realPath);
+        bytes = new Uint8Array(buf);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(`Could not read DuckDB file at ${realPath}: ${msg}`);
+      }
+      const bufferName = path.basename(realPath) || "user.duckdb";
+      await this.db.registerFileBuffer(bufferName, bytes);
+      await this.db.open({ path: bufferName, accessMode: DuckDBAccessMode.READ_ONLY });
     }
+
     this.conn = await this.db.connect();
   }
 

@@ -2,14 +2,14 @@
 
 Run DuckDB SQL directly inside your notes. Freeze the results as a plain markdown table so both you and any agent that reads the vault see `query + result` as one document.
 
-Works entirely offline with local DuckDB WASM. Paste a MotherDuck token to query your cloud data instead.
+Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query your cloud data alongside, picking per code block which connection to use.
 
 ## What it does
 
-- **`duckdb` / `motherduck` code blocks**: render a SQL panel in reading mode with a ▶ Run button.
-- **Freeze**: "Freeze MotherDuck query at cursor" or the 📌 button in reading mode runs the query and writes the result as a markdown table directly below the block, bracketed by sentinel comments.
-- **Refresh**: "Refresh all MotherDuck queries in this note" re-runs every frozen block. Unchanged SQL keeps its cached output; edited SQL re-runs.
-- **Plugin API**: `app.plugins.getPlugin('duckdb-motherduck').api.refreshFile(path)` and `.runQuery(sql)`, so Claude Code / other agents can trigger refreshes via `obsidian eval`.
+- **`duckdb` / `motherduck` code blocks**: render a SQL panel in reading mode with a ▶ Run button and a connection badge showing which engine the block runs against.
+- **Freeze**: "Freeze query at cursor" or the 📌 button in reading mode runs the query and writes the result as a markdown table directly below the block, bracketed by sentinel comments.
+- **Refresh**: "Refresh all queries in this note" re-runs every frozen block. Unchanged SQL keeps its cached output; edited SQL re-runs.
+- **Plugin API**: `app.plugins.getPlugin('duckdb-motherduck').api.refreshFile(path)` and `.runQuery(sql, connection?)` (where `connection` is `"local"` or `"cloud"`, defaulting to `"local"`), so Claude Code or other agents can trigger refreshes via `obsidian eval`.
 
 ## Freeze format
 
@@ -22,54 +22,66 @@ SELECT brand, SUM(revenue) FROM sales GROUP BY 1 ORDER BY 2 DESC LIMIT 10
 | brand | sum(revenue) |
 | ----- | ------------ |
 | acme  | 42000        |
-| …     | …            |
+| ...   | ...          |
 
 <!-- md:cache-end -->
 ````
 
-The sentinel carries a SQL hash, timestamp, and row count. Editing the SQL changes the hash → the next refresh re-runs that block. Leaving it alone keeps the cache.
+The sentinel carries a SQL hash, timestamp, and row count. Editing the SQL changes the hash, the next refresh re-runs that block. Leaving it alone keeps the cache.
 
-## Modes
+## Connections
 
-The plugin picks a backend based on whether a MotherDuck token is set:
+Each block picks its backend via the fence type. Both connections can be configured at once and used side-by-side in the same note.
 
-| Mode        | Backend                   | Needs token | Reaches cloud |
-|-------------|---------------------------|-------------|---------------|
-| DuckDB      | `@duckdb/duckdb-wasm`     | no          | no            |
-| MotherDuck  | `@motherduck/wasm-client` | yes         | yes           |
+| Fence            | Backend                   | Needs token | Reaches cloud |
+| ---------------- | ------------------------- | ----------- | ------------- |
+| ` ```duckdb `    | `@duckdb/duckdb-wasm`     | no          | no            |
+| ` ```motherduck `| `@motherduck/wasm-client` | yes         | yes           |
 
-Switch modes from the settings tab. The active mode is shown with a badge.
+Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** setting:
+
+- `:memory:` (default), ephemeral in-memory database. Reset on every Obsidian restart.
+- A bare filename like `notes.duckdb` for a persistent database in browser-managed storage (Origin Private File System). Survives Obsidian restart, full read/write, lives outside your vault.
+- An absolute path like `/Users/you/data.duckdb` or `C:\Users\you\data.duckdb` to query an existing `.duckdb` file from disk. **Read-only**: writes succeed inside the worker but don't persist back to the file.
 
 ## Install (manual, for now)
 
 The plugin isn't in the Obsidian community store yet. To install:
 
 1. Clone this repo.
-2. `npm install && npm run build` — produces `main.js`.
+2. `npm install && npm run build`, produces `main.js`.
 3. Copy `main.js` and `manifest.json` into `<your-vault>/.obsidian/plugins/duckdb-motherduck/`.
 4. In Obsidian: Settings → Community plugins → enable *DuckDB & MotherDuck*.
 
 ## Usage
 
-Create a code block:
+Create code blocks tagged with the connection you want:
 
 ````markdown
-```motherduck
+```duckdb
+-- runs against your local DuckDB
 SELECT 42 AS answer, now() AS ts
+```
+
+```motherduck
+-- runs against MotherDuck (needs a token in plugin settings)
+SELECT current_database(), current_timestamp
 ```
 ````
 
-In reading mode, click ▶ Run for an ephemeral result, or 📌 Freeze to persist it below the block. From the command palette:
+In reading mode each block shows its connection badge (`DuckDB :memory:` or `MotherDuck`) and the ▶ Run / 📌 Freeze buttons.
 
-- **Refresh all MotherDuck queries in this note** — re-runs every block (or every frozen block) in the current note.
-- **Freeze MotherDuck query at cursor** — freezes the block the cursor is on.
-- **Reset DuckDB/MotherDuck connection** — drops the current connection; useful after changing the token.
+From the command palette:
+
+- **Refresh all queries in this note**, re-runs every block in the current note.
+- **Freeze query at cursor**, freezes the block the cursor is on.
+- **Reset DuckDB/MotherDuck connections**, drops both connections; useful after changing the path or token.
 
 ## Settings
 
-- **DuckDB → Database path** — `:memory:` (default) for an ephemeral in-memory database. Persistent file paths are a future option.
-- **MotherDuck → Token** — optional. Empty means local DuckDB. Stored plaintext in the plugin's `data.json` (see Security below).
-- **General → Row cap** — max rows rendered inline or written into a frozen table. A truncation notice is appended if exceeded.
+- **DuckDB → Path to local DuckDB file**: `:memory:` (default), an OPFS bare filename, or an absolute file path. See *Connections* above.
+- **MotherDuck → Token**: optional. Stored plaintext in the plugin's `data.json` (see *Security* below). Prefer a [service account token](https://motherduck.com/docs/key-tasks/service-accounts-guide/create-and-configure-service-accounts/) for scoped, individually revocable access; or a [personal access token](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/authenticating-to-motherduck/#authentication-using-an-access-token) for quick experimentation.
+- **General → Row cap**: max rows rendered inline or written into a frozen table. A truncation notice is appended if exceeded.
 
 ## Agent trigger
 
@@ -79,47 +91,47 @@ Both the human button and the agent flow share the same code path. From a shell 
 obsidian eval code="app.plugins.getPlugin('duckdb-motherduck').api.refreshFile('path/to/note.md')"
 ```
 
-…or wire it into a Claude Code skill. The plugin reports the number of blocks refreshed.
+...or wire it into a Claude Code skill. The plugin reports the number of blocks refreshed.
 
 ## Build from source
 
 ```sh
 npm install
-npm run build     # production bundle → main.js
+npm run build     # production bundle, main.js
 npm run dev       # watch mode, rebuilds on save
 ```
 
-`main.js` ends up around 2 MB because the DuckDB WASM worker script is bundled inline. The `.wasm` binary itself is fetched from jsDelivr at runtime (see *Remote assets* below).
+`main.js` ends up around 2 MB because the local DuckDB WASM worker script is bundled inline. The `.wasm` binary itself is fetched from jsDelivr at runtime (see *Remote assets*).
 
 ## Remote assets
 
-When running in DuckDB mode (no token), the plugin fetches the DuckDB WASM binary (~7 MB gzipped) from jsDelivr the first time a query runs:
+When a `duckdb` block runs, the plugin fetches the DuckDB WASM binary (~7 MB gzipped) from jsDelivr the first time:
 
 ```
 https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@<version>/dist/duckdb-eh.wasm
 ```
 
-When running in MotherDuck mode (token set), the MotherDuck WASM extension is fetched from `https://app.motherduck.com/` during connection setup.
+When a `motherduck` block runs, the MotherDuck WASM extension and its DuckDB worker bundle are fetched from `https://app.motherduck.com/duckdb-wasm-assets/<version>/` during connection setup.
 
-No other network activity is added by the plugin.
+Both are cached by the browser. No other network activity is added by the plugin.
 
 ## Requirements
 
 - Obsidian 1.5+
-- Desktop (tested on macOS; Windows/Linux expected to work). Mobile: should work with DuckDB mode; untested.
-- Internet connection on first use (to download wasm assets). Cached by the browser after.
+- Desktop (tested on macOS; Windows/Linux expected to work, end-to-end testing pending). On mobile: `:memory:` and OPFS modes should work; absolute-path mode requires Node integration not available on mobile.
+- Internet connection on first use (to download wasm assets).
 
 ## Security
 
-The MotherDuck token, if set, is stored plaintext in `<vault>/.obsidian/plugins/duckdb-motherduck/data.json`. Don't commit that file. Don't share your vault publicly with a token in it. Keychain integration is not implemented.
+The MotherDuck token, if set, is stored plaintext in `<vault>/.obsidian/plugins/duckdb-motherduck/data.json`. Don't commit that file. Don't sync your vault publicly with a token in it. Keychain integration isn't implemented; this matches the Obsidian-plugin-ecosystem norm (no plugin SDK API for encrypted secrets, no native deps shipped via the community store).
 
-Queries run locally (DuckDB mode) or against your MotherDuck account (MotherDuck mode). No telemetry is sent by the plugin.
+Queries run locally (`duckdb` blocks) or against your MotherDuck account (`motherduck` blocks). No telemetry is sent by the plugin.
 
 ## Known limitations
 
-- **Ephemeral database only** — `:memory:` is the only DuckDB path tested end-to-end. File paths are wired through but not exercised.
-- **No mobile validation** — the architecture supports mobile (pure WASM, no native deps), but hasn't been tested on iOS/Android.
-- **MotherDuck mode requires a local patch** — see `patches/` for the cross-origin worker fix. Will be removed once a fix is released upstream.
+- **No mobile validation**, the architecture should work in mobile Obsidian for `:memory:` and OPFS modes, but hasn't been tested on iOS/Android. Absolute-path mode requires Node integration which isn't available on mobile.
+- **Read-only for on-disk files**, pointing at a real `.duckdb` file lets you query it, but writes (`CREATE` / `INSERT` / `UPDATE`) succeed only inside the worker and don't persist back to the file.
+- **No keychain integration for the MotherDuck token**, stored plaintext in `data.json`. See *Security*.
 
 ## License
 
