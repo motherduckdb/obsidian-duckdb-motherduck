@@ -127,6 +127,7 @@ obsidian eval code="app.plugins.getPlugin('duckdb-motherduck').api.refreshFile('
 
 ```sh
 npm install
+npm test         # automated unit tests for parser/cache/table helpers
 npm run build     # production bundle, main.js
 npm run dev       # watch mode, rebuilds on save
 ```
