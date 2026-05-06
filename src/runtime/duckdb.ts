@@ -138,16 +138,52 @@ export class DuckDBWasmRuntime implements Runtime {
     this.conn = await this.db.connect();
   }
 
-  async runQuery(sql: string): Promise<QueryResult> {
+  async runQuery(sql: string, rowCap?: number): Promise<QueryResult> {
     if (!this.conn) await this.init();
-    const table = await this.conn!.query(sql);
-    const columns = table.schema.fields.map((f) => f.name);
-    const rows: Row[] = table.toArray().map((r: Record<string, unknown>) => {
-      const obj: Row = {};
-      for (const c of columns) obj[c] = normalizeValue(r[c]);
-      return obj;
-    });
-    return { rows, columns };
+
+    if (rowCap === undefined) {
+      const table = await this.conn!.query(sql);
+      const columns = table.schema.fields.map((f) => f.name);
+      const rows: Row[] = table.toArray().map((r: Record<string, unknown>) => {
+        const obj: Row = {};
+        for (const c of columns) obj[c] = normalizeValue(r[c]);
+        return obj;
+      });
+      return { rows, columns, truncated: false };
+    }
+
+    // Streaming path: read batches until we have rowCap+1 rows, then cancel
+    // the underlying stream so DuckDB stops scanning. For pipeline-friendly
+    // queries (e.g. `FROM 'huge.csv'`) this avoids materializing the full
+    // result in WASM heap or in JS.
+    const limit = rowCap + 1;
+    const stream = await this.conn!.send(sql);
+    const columns = stream.schema.fields.map((f) => f.name);
+    const rows: Row[] = [];
+
+    try {
+      while (rows.length < limit) {
+        const next = await stream.next();
+        if (next.done) break;
+        const batchRows = next.value.toArray() as Record<string, unknown>[];
+        for (const r of batchRows) {
+          if (rows.length >= limit) break;
+          const obj: Row = {};
+          for (const c of columns) obj[c] = normalizeValue(r[c]);
+          rows.push(obj);
+        }
+      }
+    } finally {
+      try {
+        await stream.cancel();
+      } catch (e) {
+        console.error("[motherduck] stream cancel failed", e);
+      }
+    }
+
+    const truncated = rows.length > rowCap;
+    if (truncated) rows.length = rowCap;
+    return { rows, columns, truncated };
   }
 
   async close(): Promise<void> {

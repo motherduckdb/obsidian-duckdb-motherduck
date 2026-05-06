@@ -67,3 +67,32 @@ export function writeSentinelAfterBlock(
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+export function findCacheHashAfterLine(content: string, lineEnd: number): string | null {
+  const lines = content.split("\n");
+  let j = lineEnd + 1;
+  while (j < lines.length && lines[j].trim() === "") j++;
+  if (j >= lines.length) return null;
+  const m = lines[j].match(/<!-- md:cache hash=([0-9a-f]+)/);
+  return m ? m[1] : null;
+}
+
+export function removeSentinelAfterBlock(content: string, block: FencedBlock): string {
+  const lines = content.split("\n");
+  const afterBlock = block.endLine + 1;
+  let j = afterBlock;
+
+  while (j < lines.length && lines[j].trim() === "") j++;
+  if (j >= lines.length || !/<!-- md:cache hash=/.test(lines[j])) return content;
+
+  let k = j;
+  while (k < lines.length && !/<!-- md:cache-end -->/.test(lines[k])) k++;
+  if (k >= lines.length) return content;
+
+  let cutEnd = k + 1;
+  while (cutEnd < lines.length && lines[cutEnd].trim() === "") cutEnd++;
+
+  const before = lines.slice(0, afterBlock).join("\n");
+  const rest = lines.slice(cutEnd).join("\n");
+  return rest ? `${before}\n\n${rest}` : `${before}\n`;
+}
