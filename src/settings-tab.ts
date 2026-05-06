@@ -8,10 +8,11 @@ export interface SettingsTabHost {
   settings: Settings;
   saveSettings(): Promise<void>;
   resetRuntimes(only?: Connection): Promise<void>;
-  runQuery(sql: string, connection: Connection): Promise<QueryRunResult>;
+  runQuery(sql: string, connection: Connection, rowCap?: number): Promise<QueryRunResult>;
   startScheduler(): void;
   stopScheduler(): void;
   runManualSweep(): Promise<SweepResult>;
+  unscheduleAllNotes(): Promise<number>;
 }
 
 export class SettingsTab extends PluginSettingTab {
@@ -172,6 +173,18 @@ export class SettingsTab extends PluginSettingTab {
       );
 
     new Setting(this.containerEl)
+      .setName("Reset connections after each scheduled refresh")
+      .setDesc(
+        "Frees WASM worker memory once the hourly sweep finishes. Trade-off: the next interactive query pays ~1-2s of init cost. Recommended on for memory-heavy queries.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.resetAfterSchedule).onChange(async (v) => {
+          this.plugin.settings.resetAfterSchedule = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(this.containerEl)
       .setName("Refresh all notes with queries now")
       .setDesc("Sweeps every note in the vault that has a SQL block, ignoring cadence and frontmatter opt-in. Available even when auto-refresh is off.")
       .addButton((b) =>
@@ -194,6 +207,29 @@ export class SettingsTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(this.containerEl)
+      .setName("Unschedule all notes")
+      .setDesc(
+        "Strips duckdb-motherduck-refresh and duckdb-motherduck-refresh-last from every note's frontmatter. Use to bulk-disable auto-refresh without touching each note individually.",
+      )
+      .addButton((b) =>
+        b.setButtonText("Unschedule all").onClick(async () => {
+          b.setDisabled(true);
+          b.setButtonText("Unscheduling...");
+          try {
+            const n = await this.plugin.unscheduleAllNotes();
+            new Notice(`Unscheduled ${n} note(s)`);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(`error: ${msg}`);
+          } finally {
+            b.setDisabled(false);
+            b.setButtonText("Unschedule all");
+            this.display();
+          }
+        }),
+      );
+
     this.renderActivityLog();
 
     this.containerEl.createEl("h3", { text: "General" });
@@ -209,6 +245,24 @@ export class SettingsTab extends PluginSettingTab {
             const n = parseInt(v, 10);
             if (!Number.isNaN(n) && n > 0) {
               this.plugin.settings.rowCap = Math.min(Math.floor(n), 10000);
+              await this.plugin.saveSettings();
+            }
+          }),
+      );
+
+    new Setting(this.containerEl)
+      .setName("Cell character cap")
+      .setDesc(
+        "Max characters per cell in rendered and frozen tables; longer values are truncated with an ellipsis. Hover a truncated cell in the live result to see the full value.",
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("80")
+          .setValue(String(this.plugin.settings.cellCharCap))
+          .onChange(async (v) => {
+            const n = parseInt(v, 10);
+            if (!Number.isNaN(n) && n > 0) {
+              this.plugin.settings.cellCharCap = Math.min(Math.floor(n), 10000);
               await this.plugin.saveSettings();
             }
           }),

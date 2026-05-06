@@ -20,20 +20,45 @@ export class MotherDuckRuntime implements Runtime {
     await this.connection.isInitialized();
   }
 
-  async runQuery(sql: string): Promise<QueryResult> {
+  async runQuery(sql: string, rowCap?: number): Promise<QueryResult> {
     if (!this.connection) await this.init();
-    const result = await this.connection!.safeEvaluateQuery(sql);
+
+    if (rowCap === undefined) {
+      const result = await this.connection!.safeEvaluateQuery(sql);
+      if (result.status !== "success") {
+        const err = (result as { err?: { message?: string } }).err;
+        throw new Error(err?.message ?? JSON.stringify(err));
+      }
+      const columns = [...result.result.data.deduplicatedColumnNames()];
+      const rows = result.result.data.toRows().map((row) => {
+        const out: Row = {};
+        for (const column of columns) out[column] = normalizeValue(row[column]);
+        return out;
+      });
+      return { rows, columns, truncated: false };
+    }
+
+    // Streaming path: dataReader.readUntil(N) reads in batches of ~2048 rows
+    // until at least N rows are buffered. We ask for rowCap+1 to detect
+    // truncation, then trim to rowCap.
+    const result = await this.connection!.safeEvaluateStreamingQuery(sql);
     if (result.status !== "success") {
       const err = (result as { err?: { message?: string } }).err;
       throw new Error(err?.message ?? JSON.stringify(err));
     }
-    const columns = [...result.result.data.deduplicatedColumnNames()];
-    const rows = result.result.data.toRows().map((row) => {
+    const reader = result.result.dataReader;
+    await reader.readUntil(rowCap + 1);
+
+    const columns = [...reader.deduplicatedColumnNames()];
+    const allRows = reader.toRows();
+    const truncated = allRows.length > rowCap;
+    const sliced = truncated ? allRows.slice(0, rowCap) : allRows;
+    const rows = sliced.map((row) => {
       const out: Row = {};
       for (const column of columns) out[column] = normalizeValue(row[column]);
       return out;
     });
-    return { rows, columns };
+    return { rows, columns, truncated };
   }
 
   async close(): Promise<void> {

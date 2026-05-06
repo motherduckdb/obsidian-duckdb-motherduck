@@ -1,8 +1,24 @@
 # DuckDB & MotherDuck for Obsidian
 
-Run DuckDB SQL directly inside your notes. Freeze the results as a plain markdown table so both you and any agent that reads the vault see `query + result` as one document.
+Bring **external data** into your Obsidian notes via DuckDB SQL, then freeze the results as a plain markdown table so you and any agent reading the vault see `query + result` as one document.
 
 Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query your cloud data alongside, picking per code block which connection to use.
+
+## Why this and not Dataview?
+
+Dataview is the go-to plugin for querying *the vault itself* — your frontmatter, tags, and links across notes. This plugin solves the opposite problem: pulling **external data** (CSV, Parquet, JSON, Excel, Iceberg, Delta, geospatial files, plus your MotherDuck cloud) into a note via DuckDB SQL, and joining across them when you want.
+
+- Use **Dataview** for "list every note tagged #project, sorted by created date."
+- Use **this** for "the latest revenue numbers from my warehouse, joined with a local expenses CSV."
+
+Output is regular markdown wrapped in sentinel comments — so it diffs cleanly in git, renders in any editor (Neovim, VS Code, mobile previews), and stays readable to agents reading the vault.
+
+## When to use it
+
+- Embedding live numbers in a blog draft (e.g. `SELECT count(*) FROM read_parquet('events.parquet')`).
+- Quick exploration of a CSV/Parquet/Excel file in your data folder without leaving Obsidian.
+- Snapshotting a MotherDuck query into a weekly report note (with [scheduled refresh](#scheduled-refresh)).
+- Joining a local file (e.g. expenses CSV) with cloud tables in MotherDuck.
 
 ## What it does
 
@@ -29,6 +45,8 @@ SELECT brand, SUM(revenue) FROM sales GROUP BY 1 ORDER BY 2 DESC LIMIT 10
 ````
 
 The sentinel carries a query hash, connection, timestamp, and row count. Refresh/freeze replaces the sentinel block below the query.
+
+The frozen output is regular markdown — open the same note in Neovim, VS Code, or `cat`, and you see the table inline with the query. No custom rendering required, and any agent skimming the vault sees both the question and its answer as one document.
 
 ## Connections
 
@@ -72,9 +90,21 @@ Create code blocks tagged with the connection you want:
 SELECT 42 AS answer, now() AS ts
 ```
 
+```duckdb
+-- read a Parquet/CSV/JSON file from disk
+SELECT category, SUM(amount) AS total
+FROM read_csv('/Users/you/data/expenses.csv')
+GROUP BY 1
+ORDER BY total DESC
+LIMIT 5
+```
+
 ```motherduck
--- runs against MotherDuck (needs a token in plugin settings)
-SELECT current_database(), current_timestamp
+-- query MotherDuck and join with a local CSV in the same SQL
+SELECT s.region, s.revenue, e.amount AS expense
+FROM sales s
+LEFT JOIN read_csv('/Users/you/data/expenses.csv') e USING (region)
+ORDER BY s.revenue DESC
 ```
 ````
 
@@ -83,7 +113,9 @@ In reading mode each block shows its connection badge (`DuckDB :memory:` or `Mot
 From the command palette:
 
 - **Refresh all queries in this note**, re-runs every block in the current note.
-- **Freeze query at cursor**, freezes the block the cursor is on.
+- **Refresh query at cursor**, re-runs and re-freezes only the block the cursor is on. Bind a hotkey under Settings → Hotkeys for fast vim-mode iteration.
+- **Freeze query at cursor**, alias of "Refresh query at cursor" — kept for users who think of it as the first-time freeze action.
+- **Clear freeze at cursor**, removes the frozen result below the SQL block at the cursor (matching the **Clear freeze** button shown in the rendered panel when a frozen result is present).
 - **Reset DuckDB/MotherDuck connections**, drops both connections; useful after changing the path or token.
 
 ## Settings
@@ -93,7 +125,8 @@ From the command palette:
 - **DuckDB → Path to local DuckDB file**: `:memory:` (default), an OPFS bare filename, or an absolute file path. See *Connections* above.
 - **MotherDuck → Token**: optional. Stored plaintext in the plugin's `data.json` (see *Security* below). Prefer a [service account token](https://motherduck.com/docs/key-tasks/service-accounts-guide/create-and-configure-service-accounts/) for scoped, individually revocable access; or a [personal access token](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/authenticating-to-motherduck/#authentication-using-an-access-token) for quick experimentation.
 - **Scheduled refresh**: see the next section.
-- **General → Row cap**: max rows rendered inline or written into a frozen table. A truncation notice is appended if exceeded.
+- **General → Row cap**: max rows rendered inline or written into a frozen table. The runtime stops scanning at `rowCap + 1` rows and discards the rest, so heavy queries (`FROM 'huge.csv'`) don't materialize 40k rows in WASM heap just to throw 39 900 of them away. A truncation notice is appended if more rows existed.
+- **General → Cell character cap**: max characters per cell in rendered and frozen tables; longer values are truncated with an ellipsis. Hover a truncated cell in the live result to see the full value. Default `80`.
 
 ## Scheduled refresh
 
@@ -108,14 +141,19 @@ duckdb-motherduck-refresh-last: 2026-05-04T10:30:00Z   # plugin-managed
 
 While Obsidian is running and the **Auto-refresh scheduled notes** toggle is on, the plugin sweeps once an hour. Notes whose `last - now` exceeds their cadence get their frozen tables re-materialized. The active editor is skipped to avoid stomping in-progress edits.
 
+After each sweep finishes, if **Reset connections after each scheduled refresh** is enabled (default on), the plugin terminates the DuckDB and MotherDuck WASM workers to free memory. The next interactive query pays a ~1–2 s init cost; in exchange, you don't carry materialized result sets between sweeps.
+
+If a note errors three sweeps in a row with **every** block failing (zero blocks refreshed, errors recorded), the plugin auto-strips its `duckdb-motherduck-refresh` frontmatter so the hourly sweep stops poking it. Partial failures (some blocks succeed, some error) do **not** count — a working block keeps the schedule alive. Auto-unschedule events are written to the activity log.
+
 The settings page also has:
 
 - A **Refresh now** button: forces a sweep of *every note in the vault that has a SQL block*, regardless of cadence or frontmatter opt-in. Useful before reading a dashboard, or for one-shot refreshes.
+- An **Unschedule all** button: strips `duckdb-motherduck-refresh` (and the plugin-managed `-last` timestamp) from every note's frontmatter. Use to bulk-disable auto-refresh after experimenting, or to free up the hourly sweep before running heavy queries.
 - An **Activity log** showing the last 100 refresh attempts (timestamp, trigger, path, blocks refreshed, first error message if any). Click a path to open the note. **Clear log** wipes history.
 
 ## Agent trigger
 
-Both the human button and the agent flow share the same code path. From a shell (with the [Obsidian CLI](https://github.com/Yakitrak/obsidian-cli) installed):
+Both the human button and the agent flow share the same code path. From a shell with the [official Obsidian CLI](https://obsidian.md/help/cli) installed:
 
 ```sh
 obsidian eval code="app.plugins.getPlugin('duckdb-motherduck').api.refreshFile('path/to/note.md')"

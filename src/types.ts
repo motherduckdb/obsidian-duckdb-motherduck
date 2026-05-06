@@ -25,13 +25,16 @@ export interface Settings {
   mdToken: string;
   dbPath: string;
   rowCap: number;
+  cellCharCap: number;
   scheduleEnabled: boolean;
+  resetAfterSchedule: boolean;
   refreshLog: RefreshLogEntry[];
 }
 
 export interface QueryRunResult {
   rows: Row[];
   columns: string[];
+  truncated: boolean;
 }
 
 export interface SweepResult {
@@ -44,6 +47,10 @@ export const DEFAULTS: Settings = {
   mdToken: "",
   dbPath: ":memory:",
   rowCap: 100,
+  cellCharCap: 80,
   scheduleEnabled: false,
+  resetAfterSchedule: true,
   refreshLog: [],
 };
+
+export const AUTO_DISABLE_FAILURE_THRESHOLD = 3;

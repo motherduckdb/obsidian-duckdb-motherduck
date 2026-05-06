@@ -45,10 +45,14 @@ export class RuntimeManager {
     }
   }
 
-  async runQuery(sql: string, connection: Connection): Promise<QueryRunResult> {
+  async runQuery(
+    sql: string,
+    connection: Connection,
+    rowCap?: number,
+  ): Promise<QueryRunResult> {
     return this.enqueueQuery(connection, async () => {
       const rt = await this.getRuntime(connection);
-      return rt.runQuery(sql);
+      return rt.runQuery(sql, rowCap);
     });
   }
 

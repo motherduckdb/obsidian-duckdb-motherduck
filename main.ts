@@ -1,12 +1,18 @@
 import { MarkdownPostProcessorContext, MarkdownView, Notice, Plugin, TFile } from "obsidian";
 import { FileLock } from "./src/file-lock";
-import { findBlocks, writeSentinelAfterBlock, type FencedBlock } from "./src/markdown";
+import {
+  findBlocks,
+  removeSentinelAfterBlock,
+  writeSentinelAfterBlock,
+  type FencedBlock,
+} from "./src/markdown";
 import { renderQueryBlock } from "./src/query-block";
 import { RuntimeManager } from "./src/runtime/manager";
-import { isOverdue } from "./src/schedule";
+import { consecutiveAllErrorFailures, isOverdue } from "./src/schedule";
 import { SettingsTab } from "./src/settings-tab";
 import { renderMarkdownTable } from "./src/table";
 import {
+  AUTO_DISABLE_FAILURE_THRESHOLD,
   DEFAULTS,
   LOG_CAP,
   STARTUP_DELAY_MS,
@@ -42,6 +48,23 @@ export default class MotherDuckPlugin extends Plugin {
       renderQueryBlock(this, "cloud", src, el, ctx),
     );
 
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      const info = ctx.getSectionInfo(el);
+      if (!info) return;
+      const lines = info.text.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (!/<!-- md:cache hash=/.test(lines[i])) continue;
+        let j = i + 1;
+        while (j < lines.length && !/<!-- md:cache-end -->/.test(lines[j])) j++;
+        if (j >= lines.length) break;
+        if (info.lineStart >= i && info.lineEnd <= j) {
+          el.addClass("motherduck-cache-block");
+          return;
+        }
+        i = j;
+      }
+    });
+
     this.addCommand({
       id: "refresh-current-note",
       name: "Refresh all queries in this note",
@@ -63,6 +86,34 @@ export default class MotherDuckPlugin extends Plugin {
         if (!(view instanceof MarkdownView) || !view.file) return;
         try {
           const msg = await this.freezeAtCursor(view.file, editor.getCursor().line);
+          new Notice(msg);
+        } catch (e) {
+          new Notice(`error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      },
+    });
+
+    this.addCommand({
+      id: "refresh-at-cursor",
+      name: "Refresh query at cursor",
+      editorCallback: async (editor, view) => {
+        if (!(view instanceof MarkdownView) || !view.file) return;
+        try {
+          const msg = await this.freezeAtCursor(view.file, editor.getCursor().line);
+          new Notice(msg);
+        } catch (e) {
+          new Notice(`error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      },
+    });
+
+    this.addCommand({
+      id: "clear-freeze-at-cursor",
+      name: "Clear freeze at cursor",
+      editorCallback: async (editor, view) => {
+        if (!(view instanceof MarkdownView) || !view.file) return;
+        try {
+          const msg = await this.clearFreezeAtCursor(view.file, editor.getCursor().line);
           new Notice(msg);
         } catch (e) {
           new Notice(`error: ${e instanceof Error ? e.message : String(e)}`);
@@ -108,8 +159,12 @@ export default class MotherDuckPlugin extends Plugin {
     await this.runtimeManager.reset(only);
   }
 
-  async runQuery(sql: string, connection: Connection): Promise<QueryRunResult> {
-    return this.runtimeManager.runQuery(sql, connection);
+  async runQuery(
+    sql: string,
+    connection: Connection,
+    rowCap?: number,
+  ): Promise<QueryRunResult> {
+    return this.runtimeManager.runQuery(sql, connection, rowCap);
   }
 
   startScheduler() {
@@ -137,12 +192,40 @@ export default class MotherDuckPlugin extends Plugin {
   }
 
   async runScheduledSweep(): Promise<SweepResult> {
-    return this.runSweepInternal({
+    const result = await this.runSweepInternal({
       trigger: "schedule",
       candidates: this.discoverScheduledNotes(),
       ignoreCadence: false,
       stampLastOnSuccess: true,
     });
+    // Free WASM workers between sweeps. Trade-off: the next interactive query
+    // pays ~1-2s of init cost. Big memory win for scheduled-heavy users.
+    if (this.settings.resetAfterSchedule && result.checked > 0) {
+      try {
+        await this.resetRuntimes();
+      } catch (e) {
+        console.error("[motherduck] auto-reset after sweep failed", e);
+      }
+    }
+    return result;
+  }
+
+  async unscheduleAllNotes(): Promise<number> {
+    let count = 0;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (!fm) continue;
+      if (
+        !("duckdb-motherduck-refresh" in fm) &&
+        !("duckdb-motherduck-refresh-last" in fm)
+      ) continue;
+      await this.app.fileManager.processFrontMatter(file, (fmEdit) => {
+        delete fmEdit["duckdb-motherduck-refresh"];
+        delete fmEdit["duckdb-motherduck-refresh-last"];
+      });
+      count++;
+    }
+    return count;
   }
 
   async runManualSweep(): Promise<SweepResult> {
@@ -183,7 +266,41 @@ export default class MotherDuckPlugin extends Plugin {
       if (!hit) throw new Error("no ```duckdb or ```motherduck block at cursor");
       const newContent = await this.freezeBlock(content, hit);
       await this.modifyIfUnchanged(file, content, newContent);
-      return "Froze 1 block";
+      return "Refreshed 1 block";
+    });
+  }
+
+  async clearFreezeAtCursor(file: TFile, cursorLine: number): Promise<string> {
+    return this.fileLocks.run(file.path, async () => {
+      const content = await this.app.vault.read(file);
+      const blocks = findBlocks(content);
+      const hit = blocks.find((b) => cursorLine >= b.startLine && cursorLine <= b.endLine);
+      if (!hit) throw new Error("no ```duckdb or ```motherduck block at cursor");
+      const newContent = removeSentinelAfterBlock(content, hit);
+      if (newContent === content) return "no frozen result to clear";
+      await this.modifyIfUnchanged(file, content, newContent);
+      return "Cleared 1 frozen result";
+    });
+  }
+
+  async clearRenderedBlock(
+    ctx: MarkdownPostProcessorContext,
+    el: HTMLElement,
+  ): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+    if (!(file instanceof TFile)) throw new Error(`not a file: ${ctx.sourcePath}`);
+
+    await this.fileLocks.run(file.path, async () => {
+      const info = ctx.getSectionInfo(el);
+      if (!info) throw new Error("cannot locate block position");
+      const content = await this.app.vault.read(file);
+      const block = findBlocks(content).find(
+        (candidate) => candidate.startLine === info.lineStart && candidate.endLine === info.lineEnd,
+      );
+      if (!block) throw new Error("block not found in file");
+      const newContent = removeSentinelAfterBlock(content, block);
+      if (newContent === content) return;
+      await this.modifyIfUnchanged(file, content, newContent);
     });
   }
 
@@ -233,13 +350,19 @@ export default class MotherDuckPlugin extends Plugin {
   }
 
   async freezeBlock(content: string, block: FencedBlock): Promise<string> {
-    const { rows, columns } = await this.runQuery(block.sql, block.connection);
+    const { rows, columns, truncated } = await this.runQuery(
+      block.sql,
+      block.connection,
+      this.settings.rowCap,
+    );
     const mdTable = renderMarkdownTable(
       rows,
       columns,
       block.sql,
       block.connection,
       this.settings.rowCap,
+      this.settings.cellCharCap,
+      truncated,
     );
     return writeSentinelAfterBlock(content, block, mdTable);
   }
@@ -291,6 +414,9 @@ export default class MotherDuckPlugin extends Plugin {
           });
           if (result.errored > 0) errored++;
           else refreshed++;
+          if (opts.trigger === "schedule") {
+            await this.maybeAutoUnschedule(file);
+          }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.error(`[motherduck] sweep: refresh failed for ${file.path}:`, e);
@@ -303,6 +429,9 @@ export default class MotherDuckPlugin extends Plugin {
             errorMessage: msg,
           });
           errored++;
+          if (opts.trigger === "schedule") {
+            await this.maybeAutoUnschedule(file);
+          }
         }
       }
     } finally {
@@ -339,6 +468,39 @@ export default class MotherDuckPlugin extends Plugin {
       }
     }
     return out;
+  }
+
+  private async maybeAutoUnschedule(file: TFile): Promise<void> {
+    const count = consecutiveAllErrorFailures(this.settings.refreshLog, file.path);
+    if (count < AUTO_DISABLE_FAILURE_THRESHOLD) return;
+
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    if (
+      !fm ||
+      (!("duckdb-motherduck-refresh" in fm) && !("duckdb-motherduck-refresh-last" in fm))
+    ) {
+      return;
+    }
+
+    try {
+      await this.app.fileManager.processFrontMatter(file, (fmEdit) => {
+        delete fmEdit["duckdb-motherduck-refresh"];
+        delete fmEdit["duckdb-motherduck-refresh-last"];
+      });
+      await this.appendLog({
+        ts: new Date().toISOString(),
+        path: file.path,
+        trigger: "schedule",
+        blocks: 0,
+        errored: 0,
+        errorMessage: `Auto-unscheduled after ${AUTO_DISABLE_FAILURE_THRESHOLD} consecutive failures`,
+      });
+      console.log(
+        `[motherduck] auto-unscheduled ${file.path} after ${count} consecutive failures`,
+      );
+    } catch (e) {
+      console.error("[motherduck] auto-unschedule failed", e);
+    }
   }
 
   private async appendLog(entry: RefreshLogEntry) {

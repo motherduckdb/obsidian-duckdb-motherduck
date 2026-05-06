@@ -1,19 +1,21 @@
 import { App, MarkdownPostProcessorContext, Notice, TFile, setIcon } from "obsidian";
 import { DUCKDB_ICON, MOTHERDUCK_ICON } from "./icons";
+import { findCacheHashAfterLine } from "./markdown";
 import { shortPathLabel } from "./path";
-import { renderDomTable } from "./table";
+import { renderDomTable, simpleHash } from "./table";
 import type { Connection, QueryRunResult, Settings } from "./types";
 
 export interface QueryBlockHost {
   app: App;
   settings: Settings;
-  runQuery(sql: string, connection: Connection): Promise<QueryRunResult>;
+  runQuery(sql: string, connection: Connection, rowCap?: number): Promise<QueryRunResult>;
   freezeRenderedBlock(
     ctx: MarkdownPostProcessorContext,
     el: HTMLElement,
     sql: string,
     connection: Connection,
   ): Promise<void>;
+  clearRenderedBlock(ctx: MarkdownPostProcessorContext, el: HTMLElement): Promise<void>;
 }
 
 export function renderQueryBlock(
@@ -41,6 +43,15 @@ export function renderQueryBlock(
     badge.createEl("code", { text: shortPathLabel(host.settings.dbPath) });
   }
 
+  const info = ctx.getSectionInfo(el);
+  const cachedHash = info ? findCacheHashAfterLine(info.text, info.lineEnd) : null;
+  if (cachedHash && cachedHash !== simpleHash(`${connection}\n${sql}`)) {
+    const warn = badge.createEl("span", { cls: "motherduck-block__stale-warn" });
+    warn.title =
+      "The frozen result below was produced by a different query or connection. Run/Freeze to update it.";
+    warn.appendText("⚠ cache stale");
+  }
+
   attachRefreshDropdown(host, badge, ctx);
 
   const pre = wrap.createEl("pre", { cls: "motherduck-block__sql" });
@@ -60,6 +71,15 @@ export function renderQueryBlock(
   freezeBtn.title = "Run and freeze result below this block";
   freezeBtn.setAttr("aria-label", "Run and freeze result below this block");
 
+  let clearBtn: HTMLButtonElement | null = null;
+  if (cachedHash) {
+    clearBtn = btnRow.createEl("button", { cls: "motherduck-block__button" });
+    setIcon(clearBtn, "eraser");
+    clearBtn.appendText("Clear freeze");
+    clearBtn.title = "Remove the frozen result below this block";
+    clearBtn.setAttr("aria-label", "Remove the frozen result below this block");
+  }
+
   const status = btnRow.createEl("span", { cls: "motherduck-block__status" });
   const resultEl = wrap.createDiv({ cls: "motherduck-block__result" });
 
@@ -69,10 +89,22 @@ export function renderQueryBlock(
     setButtonsDisabled(true);
     const t0 = performance.now();
     try {
-      const { rows, columns } = await host.runQuery(sql, connection);
+      const { rows, columns, truncated } = await host.runQuery(
+        sql,
+        connection,
+        host.settings.rowCap,
+      );
       const dt = Math.round(performance.now() - t0);
-      status.setText(`${rows.length} row(s) · ${dt} ms`);
-      renderDomTable(resultEl, rows, columns, host.settings.rowCap);
+      const rowsLabel = truncated ? `${rows.length}+ row(s)` : `${rows.length} row(s)`;
+      status.setText(`${rowsLabel} · ${dt} ms`);
+      renderDomTable(
+        resultEl,
+        rows,
+        columns,
+        host.settings.rowCap,
+        host.settings.cellCharCap,
+        truncated,
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       status.setText("error");
@@ -97,13 +129,28 @@ export function renderQueryBlock(
     }
   });
 
+  if (clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      status.setText("clearing…");
+      setButtonsDisabled(true);
+      try {
+        await host.clearRenderedBlock(ctx, el);
+        status.setText("cleared ✓");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        status.setText(`error: ${msg}`);
+        console.error("[motherduck] clear failed", e);
+      } finally {
+        setButtonsDisabled(false);
+      }
+    });
+  }
+
   function setButtonsDisabled(disabled: boolean) {
-    if (disabled) {
-      runBtn.setAttr("disabled", "true");
-      freezeBtn.setAttr("disabled", "true");
-    } else {
-      runBtn.removeAttribute("disabled");
-      freezeBtn.removeAttribute("disabled");
+    for (const btn of [runBtn, freezeBtn, clearBtn]) {
+      if (!btn) continue;
+      if (disabled) btn.setAttr("disabled", "true");
+      else btn.removeAttribute("disabled");
     }
   }
 }
