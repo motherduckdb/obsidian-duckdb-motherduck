@@ -29,6 +29,13 @@
   height: 14px;
 }
 
+.motherduck-block__stale-warn {
+  color: var(--text-warning);
+  font-size: var(--font-ui-smaller);
+  padding: 0 4px;
+  cursor: help;
+}
+
 .motherduck-refresh-control {
   display: flex;
   align-items: center;
