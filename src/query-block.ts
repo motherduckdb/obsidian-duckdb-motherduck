@@ -8,7 +8,7 @@ import type { Connection, QueryRunResult, Settings } from "./types";
 export interface QueryBlockHost {
   app: App;
   settings: Settings;
-  runQuery(sql: string, connection: Connection): Promise<QueryRunResult>;
+  runQuery(sql: string, connection: Connection, rowCap?: number): Promise<QueryRunResult>;
   freezeRenderedBlock(
     ctx: MarkdownPostProcessorContext,
     el: HTMLElement,
@@ -89,10 +89,22 @@ export function renderQueryBlock(
     setButtonsDisabled(true);
     const t0 = performance.now();
     try {
-      const { rows, columns } = await host.runQuery(sql, connection);
+      const { rows, columns, truncated } = await host.runQuery(
+        sql,
+        connection,
+        host.settings.rowCap,
+      );
       const dt = Math.round(performance.now() - t0);
-      status.setText(`${rows.length} row(s) · ${dt} ms`);
-      renderDomTable(resultEl, rows, columns, host.settings.rowCap, host.settings.cellCharCap);
+      const rowsLabel = truncated ? `${rows.length}+ row(s)` : `${rows.length} row(s)`;
+      status.setText(`${rowsLabel} · ${dt} ms`);
+      renderDomTable(
+        resultEl,
+        rows,
+        columns,
+        host.settings.rowCap,
+        host.settings.cellCharCap,
+        truncated,
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       status.setText("error");

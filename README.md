@@ -125,7 +125,7 @@ From the command palette:
 - **DuckDB → Path to local DuckDB file**: `:memory:` (default), an OPFS bare filename, or an absolute file path. See *Connections* above.
 - **MotherDuck → Token**: optional. Stored plaintext in the plugin's `data.json` (see *Security* below). Prefer a [service account token](https://motherduck.com/docs/key-tasks/service-accounts-guide/create-and-configure-service-accounts/) for scoped, individually revocable access; or a [personal access token](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/authenticating-to-motherduck/#authentication-using-an-access-token) for quick experimentation.
 - **Scheduled refresh**: see the next section.
-- **General → Row cap**: max rows rendered inline or written into a frozen table. A truncation notice is appended if exceeded.
+- **General → Row cap**: max rows rendered inline or written into a frozen table. The runtime stops scanning at `rowCap + 1` rows and discards the rest, so heavy queries (`FROM 'huge.csv'`) don't materialize 40k rows in WASM heap just to throw 39 900 of them away. A truncation notice is appended if more rows existed.
 - **General → Cell character cap**: max characters per cell in rendered and frozen tables; longer values are truncated with an ellipsis. Hover a truncated cell in the live result to see the full value. Default `80`.
 
 ## Scheduled refresh
@@ -140,6 +140,10 @@ duckdb-motherduck-refresh-last: 2026-05-04T10:30:00Z   # plugin-managed
 ```
 
 While Obsidian is running and the **Auto-refresh scheduled notes** toggle is on, the plugin sweeps once an hour. Notes whose `last - now` exceeds their cadence get their frozen tables re-materialized. The active editor is skipped to avoid stomping in-progress edits.
+
+After each sweep finishes, if **Reset connections after each scheduled refresh** is enabled (default on), the plugin terminates the DuckDB and MotherDuck WASM workers to free memory. The next interactive query pays a ~1–2 s init cost; in exchange, you don't carry materialized result sets between sweeps.
+
+If a note errors three sweeps in a row with **every** block failing (zero blocks refreshed, errors recorded), the plugin auto-strips its `duckdb-motherduck-refresh` frontmatter so the hourly sweep stops poking it. Partial failures (some blocks succeed, some error) do **not** count — a working block keeps the schedule alive. Auto-unschedule events are written to the activity log.
 
 The settings page also has:
 

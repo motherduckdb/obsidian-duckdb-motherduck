@@ -31,6 +31,7 @@ export function renderMarkdownTable(
   connection: Connection,
   rowCap: number,
   cellCharCap: number = DEFAULTS.cellCharCap,
+  truncated: boolean = false,
 ): string {
   const hash = simpleHash(`${connection}\n${sql.trim()}`);
   const ts = new Date().toISOString();
@@ -38,7 +39,11 @@ export function renderMarkdownTable(
   const cap = normalizedRowCap(rowCap);
   const shown = rows.slice(0, cap);
 
-  const open = `<!-- md:cache hash=${hash} conn=${connection} ts=${ts} rows=${totalRows} -->`;
+  // When `truncated` is set, totalRows is the (capped) count we read, not the
+  // true total — DuckDB stopped scanning early. Mark the sentinel with `+` so
+  // the count is unambiguous.
+  const rowsAttr = truncated ? `${totalRows}+` : `${totalRows}`;
+  const open = `<!-- md:cache hash=${hash} conn=${connection} ts=${ts} rows=${rowsAttr} -->`;
   const close = "<!-- md:cache-end -->";
 
   if (columns.length === 0) {
@@ -51,10 +56,13 @@ export function renderMarkdownTable(
     (r) => "| " + columns.map((c) => escapeCell(r[c], cellCharCap)).join(" | ") + " |",
   );
   const emptyNotice = totalRows === 0 ? "\n\n> 0 rows" : "";
-  const truncated =
-    totalRows > cap ? `\n\n> … ${totalRows - cap} more rows hidden (cap ${cap})` : "";
+  const truncatedNotice = truncated
+    ? `\n\n> … more rows hidden (cap ${cap}; query stopped early)`
+    : totalRows > cap
+      ? `\n\n> … ${totalRows - cap} more rows hidden (cap ${cap})`
+      : "";
 
-  return `${open}\n\n${header}\n${sep}\n${body.join("\n")}${emptyNotice}${truncated}\n\n${close}`;
+  return `${open}\n\n${header}\n${sep}\n${body.join("\n")}${emptyNotice}${truncatedNotice}\n\n${close}`;
 }
 
 export function renderDomTable(
@@ -63,6 +71,7 @@ export function renderDomTable(
   columns: string[],
   rowCap: number,
   cellCharCap: number = DEFAULTS.cellCharCap,
+  truncated: boolean = false,
 ) {
   if (columns.length === 0) {
     parent.createEl("em", { text: "(0 rows)" });
@@ -97,7 +106,13 @@ export function renderDomTable(
     empty.style.marginTop = "4px";
   }
 
-  if (rows.length > cap) {
+  if (truncated) {
+    const more = parent.createEl("div", {
+      cls: "motherduck-muted",
+      text: `… more rows hidden (cap ${cap}; query stopped early)`,
+    });
+    more.style.marginTop = "4px";
+  } else if (rows.length > cap) {
     const more = parent.createEl("div", {
       cls: "motherduck-muted",
       text: `… ${rows.length - cap} more rows hidden (cap ${cap})`,

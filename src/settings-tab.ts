@@ -8,7 +8,7 @@ export interface SettingsTabHost {
   settings: Settings;
   saveSettings(): Promise<void>;
   resetRuntimes(only?: Connection): Promise<void>;
-  runQuery(sql: string, connection: Connection): Promise<QueryRunResult>;
+  runQuery(sql: string, connection: Connection, rowCap?: number): Promise<QueryRunResult>;
   startScheduler(): void;
   stopScheduler(): void;
   runManualSweep(): Promise<SweepResult>;
@@ -169,6 +169,18 @@ export class SettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           if (v) this.plugin.startScheduler();
           else this.plugin.stopScheduler();
+        }),
+      );
+
+    new Setting(this.containerEl)
+      .setName("Reset connections after each scheduled refresh")
+      .setDesc(
+        "Frees WASM worker memory once the hourly sweep finishes. Trade-off: the next interactive query pays ~1-2s of init cost. Recommended on for memory-heavy queries.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.resetAfterSchedule).onChange(async (v) => {
+          this.plugin.settings.resetAfterSchedule = v;
+          await this.plugin.saveSettings();
         }),
       );
 

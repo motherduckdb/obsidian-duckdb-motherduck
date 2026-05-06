@@ -3,11 +3,24 @@ export type Row = Record<string, unknown>;
 export interface QueryResult {
   rows: Row[];
   columns: string[];
+  /**
+   * True when the query produced more rows than the caller asked for via
+   * `rowCap`. The runtime stops reading at `rowCap + 1` and trims to `rowCap`,
+   * so the precise total is unknown. False (or absent) means we materialized
+   * the entire result and `rows.length` is the true total.
+   */
+  truncated: boolean;
 }
 
 export interface Runtime {
   init(): Promise<void>;
-  runQuery(sql: string): Promise<QueryResult>;
+  /**
+   * Run `sql` and return rows + columns. If `rowCap` is set, the runtime stops
+   * reading after `rowCap + 1` rows, trims to `rowCap`, and returns
+   * `truncated: true`. If `rowCap` is undefined, the entire result is
+   * materialized (legacy behavior, used for the public plugin API).
+   */
+  runQuery(sql: string, rowCap?: number): Promise<QueryResult>;
   close(): Promise<void>;
   label(): string;
 }
