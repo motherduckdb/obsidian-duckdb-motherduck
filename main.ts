@@ -8,10 +8,11 @@ import {
 } from "./src/markdown";
 import { renderQueryBlock } from "./src/query-block";
 import { RuntimeManager } from "./src/runtime/manager";
-import { isOverdue } from "./src/schedule";
+import { consecutiveAllErrorFailures, isOverdue } from "./src/schedule";
 import { SettingsTab } from "./src/settings-tab";
 import { renderMarkdownTable } from "./src/table";
 import {
+  AUTO_DISABLE_FAILURE_THRESHOLD,
   DEFAULTS,
   LOG_CAP,
   STARTUP_DELAY_MS,
@@ -158,8 +159,12 @@ export default class MotherDuckPlugin extends Plugin {
     await this.runtimeManager.reset(only);
   }
 
-  async runQuery(sql: string, connection: Connection): Promise<QueryRunResult> {
-    return this.runtimeManager.runQuery(sql, connection);
+  async runQuery(
+    sql: string,
+    connection: Connection,
+    rowCap?: number,
+  ): Promise<QueryRunResult> {
+    return this.runtimeManager.runQuery(sql, connection, rowCap);
   }
 
   startScheduler() {
@@ -187,12 +192,22 @@ export default class MotherDuckPlugin extends Plugin {
   }
 
   async runScheduledSweep(): Promise<SweepResult> {
-    return this.runSweepInternal({
+    const result = await this.runSweepInternal({
       trigger: "schedule",
       candidates: this.discoverScheduledNotes(),
       ignoreCadence: false,
       stampLastOnSuccess: true,
     });
+    // Free WASM workers between sweeps. Trade-off: the next interactive query
+    // pays ~1-2s of init cost. Big memory win for scheduled-heavy users.
+    if (this.settings.resetAfterSchedule && result.checked > 0) {
+      try {
+        await this.resetRuntimes();
+      } catch (e) {
+        console.error("[motherduck] auto-reset after sweep failed", e);
+      }
+    }
+    return result;
   }
 
   async unscheduleAllNotes(): Promise<number> {
@@ -335,7 +350,11 @@ export default class MotherDuckPlugin extends Plugin {
   }
 
   async freezeBlock(content: string, block: FencedBlock): Promise<string> {
-    const { rows, columns } = await this.runQuery(block.sql, block.connection);
+    const { rows, columns, truncated } = await this.runQuery(
+      block.sql,
+      block.connection,
+      this.settings.rowCap,
+    );
     const mdTable = renderMarkdownTable(
       rows,
       columns,
@@ -343,6 +362,7 @@ export default class MotherDuckPlugin extends Plugin {
       block.connection,
       this.settings.rowCap,
       this.settings.cellCharCap,
+      truncated,
     );
     return writeSentinelAfterBlock(content, block, mdTable);
   }
@@ -394,6 +414,9 @@ export default class MotherDuckPlugin extends Plugin {
           });
           if (result.errored > 0) errored++;
           else refreshed++;
+          if (opts.trigger === "schedule") {
+            await this.maybeAutoUnschedule(file);
+          }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           console.error(`[motherduck] sweep: refresh failed for ${file.path}:`, e);
@@ -406,6 +429,9 @@ export default class MotherDuckPlugin extends Plugin {
             errorMessage: msg,
           });
           errored++;
+          if (opts.trigger === "schedule") {
+            await this.maybeAutoUnschedule(file);
+          }
         }
       }
     } finally {
@@ -442,6 +468,39 @@ export default class MotherDuckPlugin extends Plugin {
       }
     }
     return out;
+  }
+
+  private async maybeAutoUnschedule(file: TFile): Promise<void> {
+    const count = consecutiveAllErrorFailures(this.settings.refreshLog, file.path);
+    if (count < AUTO_DISABLE_FAILURE_THRESHOLD) return;
+
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    if (
+      !fm ||
+      (!("duckdb-motherduck-refresh" in fm) && !("duckdb-motherduck-refresh-last" in fm))
+    ) {
+      return;
+    }
+
+    try {
+      await this.app.fileManager.processFrontMatter(file, (fmEdit) => {
+        delete fmEdit["duckdb-motherduck-refresh"];
+        delete fmEdit["duckdb-motherduck-refresh-last"];
+      });
+      await this.appendLog({
+        ts: new Date().toISOString(),
+        path: file.path,
+        trigger: "schedule",
+        blocks: 0,
+        errored: 0,
+        errorMessage: `Auto-unscheduled after ${AUTO_DISABLE_FAILURE_THRESHOLD} consecutive failures`,
+      });
+      console.log(
+        `[motherduck] auto-unscheduled ${file.path} after ${count} consecutive failures`,
+      );
+    } catch (e) {
+      console.error("[motherduck] auto-unschedule failed", e);
+    }
   }
 
   private async appendLog(entry: RefreshLogEntry) {

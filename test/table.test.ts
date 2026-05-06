@@ -81,6 +81,21 @@ test("renderMarkdownTable truncates rendered rows at the row cap", () => {
   assert.match(rendered, /1 more rows hidden \(cap 2\)/);
 });
 
+test("renderMarkdownTable marks truncated streamed results in sentinel + body", () => {
+  const rendered = renderMarkdownTable(
+    [{ x: 1 }, { x: 2 }],
+    ["x"],
+    "select x from t",
+    "local",
+    100,
+    80,
+    true, // truncated
+  );
+
+  assert.match(rendered, /rows=2\+/);
+  assert.match(rendered, /more rows hidden \(cap 100; query stopped early\)/);
+});
+
 test("renderMarkdownTable truncates long cell values per cellCharCap", () => {
   const long = "x".repeat(200);
   const rendered = renderMarkdownTable(
