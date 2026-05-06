@@ -12,6 +12,7 @@ export interface SettingsTabHost {
   startScheduler(): void;
   stopScheduler(): void;
   runManualSweep(): Promise<SweepResult>;
+  unscheduleAllNotes(): Promise<number>;
 }
 
 export class SettingsTab extends PluginSettingTab {
@@ -189,6 +190,29 @@ export class SettingsTab extends PluginSettingTab {
           } finally {
             b.setDisabled(false);
             b.setButtonText("Refresh now");
+            this.display();
+          }
+        }),
+      );
+
+    new Setting(this.containerEl)
+      .setName("Unschedule all notes")
+      .setDesc(
+        "Strips duckdb-motherduck-refresh and duckdb-motherduck-refresh-last from every note's frontmatter. Use to bulk-disable auto-refresh without touching each note individually.",
+      )
+      .addButton((b) =>
+        b.setButtonText("Unschedule all").onClick(async () => {
+          b.setDisabled(true);
+          b.setButtonText("Unscheduling...");
+          try {
+            const n = await this.plugin.unscheduleAllNotes();
+            new Notice(`Unscheduled ${n} note(s)`);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(`error: ${msg}`);
+          } finally {
+            b.setDisabled(false);
+            b.setButtonText("Unschedule all");
             this.display();
           }
         }),

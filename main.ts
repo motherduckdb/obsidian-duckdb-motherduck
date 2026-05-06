@@ -195,6 +195,24 @@ export default class MotherDuckPlugin extends Plugin {
     });
   }
 
+  async unscheduleAllNotes(): Promise<number> {
+    let count = 0;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (!fm) continue;
+      if (
+        !("duckdb-motherduck-refresh" in fm) &&
+        !("duckdb-motherduck-refresh-last" in fm)
+      ) continue;
+      await this.app.fileManager.processFrontMatter(file, (fmEdit) => {
+        delete fmEdit["duckdb-motherduck-refresh"];
+        delete fmEdit["duckdb-motherduck-refresh-last"];
+      });
+      count++;
+    }
+    return count;
+  }
+
   async runManualSweep(): Promise<SweepResult> {
     const all = await this.discoverNotesWithBlocks();
     const optedIn = new Set(this.discoverScheduledNotes().map((c) => c.file.path));
