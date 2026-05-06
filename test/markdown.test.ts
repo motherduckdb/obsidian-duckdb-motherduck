@@ -1,6 +1,11 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { findBlocks, findCacheHashAfterLine, writeSentinelAfterBlock } from "../src/markdown";
+import {
+  findBlocks,
+  findCacheHashAfterLine,
+  removeSentinelAfterBlock,
+  writeSentinelAfterBlock,
+} from "../src/markdown";
 
 test("findBlocks parses duckdb and motherduck fences with info text", () => {
   const blocks = findBlocks(
@@ -116,6 +121,73 @@ test("findCacheHashAfterLine returns null when there is no cache", () => {
   ].join("\n");
 
   assert.equal(findCacheHashAfterLine(content, 2), null);
+});
+
+test("removeSentinelAfterBlock strips a cache directly below the block", () => {
+  const content = [
+    "before",
+    "```duckdb",
+    "select 1",
+    "```",
+    "",
+    "<!-- md:cache hash=abc -->",
+    "",
+    "| x |",
+    "| - |",
+    "| 1 |",
+    "",
+    "<!-- md:cache-end -->",
+    "",
+    "after",
+  ].join("\n");
+  const block = findBlocks(content)[0];
+
+  assert.equal(
+    removeSentinelAfterBlock(content, block),
+    ["before", "```duckdb", "select 1", "```", "", "after"].join("\n"),
+  );
+});
+
+test("removeSentinelAfterBlock returns content unchanged when no cache present", () => {
+  const content = ["```duckdb", "select 1", "```", "", "after"].join("\n");
+  const block = findBlocks(content)[0];
+
+  assert.equal(removeSentinelAfterBlock(content, block), content);
+});
+
+test("removeSentinelAfterBlock handles a cache at end of file", () => {
+  const content = [
+    "```duckdb",
+    "select 1",
+    "```",
+    "",
+    "<!-- md:cache hash=abc -->",
+    "",
+    "result",
+    "",
+    "<!-- md:cache-end -->",
+  ].join("\n");
+  const block = findBlocks(content)[0];
+
+  assert.equal(
+    removeSentinelAfterBlock(content, block),
+    ["```duckdb", "select 1", "```", ""].join("\n"),
+  );
+});
+
+test("removeSentinelAfterBlock leaves caches that aren't directly after the block", () => {
+  const content = [
+    "```duckdb",
+    "select 1",
+    "```",
+    "",
+    "intervening paragraph",
+    "<!-- md:cache hash=abc -->",
+    "<!-- md:cache-end -->",
+  ].join("\n");
+  const block = findBlocks(content)[0];
+
+  assert.equal(removeSentinelAfterBlock(content, block), content);
 });
 
 test("findCacheHashAfterLine ignores caches separated by other content", () => {

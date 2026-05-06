@@ -1,6 +1,11 @@
 import { MarkdownPostProcessorContext, MarkdownView, Notice, Plugin, TFile } from "obsidian";
 import { FileLock } from "./src/file-lock";
-import { findBlocks, writeSentinelAfterBlock, type FencedBlock } from "./src/markdown";
+import {
+  findBlocks,
+  removeSentinelAfterBlock,
+  writeSentinelAfterBlock,
+  type FencedBlock,
+} from "./src/markdown";
 import { renderQueryBlock } from "./src/query-block";
 import { RuntimeManager } from "./src/runtime/manager";
 import { isOverdue } from "./src/schedule";
@@ -94,6 +99,20 @@ export default class MotherDuckPlugin extends Plugin {
         if (!(view instanceof MarkdownView) || !view.file) return;
         try {
           const msg = await this.freezeAtCursor(view.file, editor.getCursor().line);
+          new Notice(msg);
+        } catch (e) {
+          new Notice(`error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      },
+    });
+
+    this.addCommand({
+      id: "clear-freeze-at-cursor",
+      name: "Clear frozen result at cursor",
+      editorCallback: async (editor, view) => {
+        if (!(view instanceof MarkdownView) || !view.file) return;
+        try {
+          const msg = await this.clearFreezeAtCursor(view.file, editor.getCursor().line);
           new Notice(msg);
         } catch (e) {
           new Notice(`error: ${e instanceof Error ? e.message : String(e)}`);
@@ -215,6 +234,40 @@ export default class MotherDuckPlugin extends Plugin {
       const newContent = await this.freezeBlock(content, hit);
       await this.modifyIfUnchanged(file, content, newContent);
       return "Refreshed 1 block";
+    });
+  }
+
+  async clearFreezeAtCursor(file: TFile, cursorLine: number): Promise<string> {
+    return this.fileLocks.run(file.path, async () => {
+      const content = await this.app.vault.read(file);
+      const blocks = findBlocks(content);
+      const hit = blocks.find((b) => cursorLine >= b.startLine && cursorLine <= b.endLine);
+      if (!hit) throw new Error("no ```duckdb or ```motherduck block at cursor");
+      const newContent = removeSentinelAfterBlock(content, hit);
+      if (newContent === content) return "no frozen result to clear";
+      await this.modifyIfUnchanged(file, content, newContent);
+      return "Cleared 1 frozen result";
+    });
+  }
+
+  async clearRenderedBlock(
+    ctx: MarkdownPostProcessorContext,
+    el: HTMLElement,
+  ): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+    if (!(file instanceof TFile)) throw new Error(`not a file: ${ctx.sourcePath}`);
+
+    await this.fileLocks.run(file.path, async () => {
+      const info = ctx.getSectionInfo(el);
+      if (!info) throw new Error("cannot locate block position");
+      const content = await this.app.vault.read(file);
+      const block = findBlocks(content).find(
+        (candidate) => candidate.startLine === info.lineStart && candidate.endLine === info.lineEnd,
+      );
+      if (!block) throw new Error("block not found in file");
+      const newContent = removeSentinelAfterBlock(content, block);
+      if (newContent === content) return;
+      await this.modifyIfUnchanged(file, content, newContent);
     });
   }
 

@@ -115,6 +115,7 @@ From the command palette:
 - **Refresh all queries in this note**, re-runs every block in the current note.
 - **Refresh query at cursor**, re-runs and re-freezes only the block the cursor is on. Bind a hotkey under Settings → Hotkeys for fast vim-mode iteration.
 - **Freeze query at cursor**, alias of "Refresh query at cursor" — kept for users who think of it as the first-time freeze action.
+- **Clear frozen result at cursor**, removes the frozen sentinel block below the SQL block at the cursor (matching the Clear button shown in the rendered panel when a frozen result is present).
 - **Reset DuckDB/MotherDuck connections**, drops both connections; useful after changing the path or token.
 
 ## Settings
