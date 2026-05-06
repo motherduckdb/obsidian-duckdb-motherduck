@@ -25,6 +25,7 @@ export interface Settings {
   mdToken: string;
   dbPath: string;
   rowCap: number;
+  cellCharCap: number;
   scheduleEnabled: boolean;
   refreshLog: RefreshLogEntry[];
 }
@@ -44,6 +45,7 @@ export const DEFAULTS: Settings = {
   mdToken: "",
   dbPath: ":memory:",
   rowCap: 100,
+  cellCharCap: 80,
   scheduleEnabled: false,
   refreshLog: [],
 };

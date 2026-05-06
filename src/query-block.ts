@@ -72,7 +72,7 @@ export function renderQueryBlock(
       const { rows, columns } = await host.runQuery(sql, connection);
       const dt = Math.round(performance.now() - t0);
       status.setText(`${rows.length} row(s) · ${dt} ms`);
-      renderDomTable(resultEl, rows, columns, host.settings.rowCap);
+      renderDomTable(resultEl, rows, columns, host.settings.rowCap, host.settings.cellCharCap);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       status.setText("error");

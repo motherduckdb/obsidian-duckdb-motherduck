@@ -42,6 +42,23 @@ export default class MotherDuckPlugin extends Plugin {
       renderQueryBlock(this, "cloud", src, el, ctx),
     );
 
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      const info = ctx.getSectionInfo(el);
+      if (!info) return;
+      const lines = info.text.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (!/<!-- md:cache hash=/.test(lines[i])) continue;
+        let j = i + 1;
+        while (j < lines.length && !/<!-- md:cache-end -->/.test(lines[j])) j++;
+        if (j >= lines.length) break;
+        if (info.lineStart >= i && info.lineEnd <= j) {
+          el.addClass("motherduck-cache-block");
+          return;
+        }
+        i = j;
+      }
+    });
+
     this.addCommand({
       id: "refresh-current-note",
       name: "Refresh all queries in this note",
@@ -59,6 +76,20 @@ export default class MotherDuckPlugin extends Plugin {
     this.addCommand({
       id: "freeze-at-cursor",
       name: "Freeze query at cursor",
+      editorCallback: async (editor, view) => {
+        if (!(view instanceof MarkdownView) || !view.file) return;
+        try {
+          const msg = await this.freezeAtCursor(view.file, editor.getCursor().line);
+          new Notice(msg);
+        } catch (e) {
+          new Notice(`error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      },
+    });
+
+    this.addCommand({
+      id: "refresh-at-cursor",
+      name: "Refresh query at cursor",
       editorCallback: async (editor, view) => {
         if (!(view instanceof MarkdownView) || !view.file) return;
         try {
@@ -183,7 +214,7 @@ export default class MotherDuckPlugin extends Plugin {
       if (!hit) throw new Error("no ```duckdb or ```motherduck block at cursor");
       const newContent = await this.freezeBlock(content, hit);
       await this.modifyIfUnchanged(file, content, newContent);
-      return "Froze 1 block";
+      return "Refreshed 1 block";
     });
   }
 
@@ -240,6 +271,7 @@ export default class MotherDuckPlugin extends Plugin {
       block.sql,
       block.connection,
       this.settings.rowCap,
+      this.settings.cellCharCap,
     );
     return writeSentinelAfterBlock(content, block, mdTable);
   }
