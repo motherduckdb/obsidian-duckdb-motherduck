@@ -100,6 +100,17 @@
   vertical-align: top;
 }
 
+.motherduck-result-table td {
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-source-view.is-live-preview .motherduck-cache-block {
+  display: none;
+}
+
 @media (max-width: 520px) {
   .motherduck-block__badge {
     align-items: flex-start;

@@ -213,6 +213,24 @@ export class SettingsTab extends PluginSettingTab {
             }
           }),
       );
+
+    new Setting(this.containerEl)
+      .setName("Cell character cap")
+      .setDesc(
+        "Max characters per cell in rendered and frozen tables; longer values are truncated with an ellipsis. Hover a truncated cell in the live result to see the full value.",
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("80")
+          .setValue(String(this.plugin.settings.cellCharCap))
+          .onChange(async (v) => {
+            const n = parseInt(v, 10);
+            if (!Number.isNaN(n) && n > 0) {
+              this.plugin.settings.cellCharCap = Math.min(Math.floor(n), 10000);
+              await this.plugin.saveSettings();
+            }
+          }),
+      );
   }
 
   private renderActivityLog() {

@@ -8,9 +8,19 @@ export function simpleHash(s: string): string {
   return (h >>> 0).toString(16).padStart(8, "0");
 }
 
-export function escapeCell(v: unknown): string {
+export function stringifyCell(v: unknown): string {
   if (v === null || v === undefined) return "";
-  const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return typeof v === "object" ? JSON.stringify(v) : String(v);
+}
+
+export function truncateString(s: string, charCap: number): string {
+  const cap = normalizedCellCharCap(charCap);
+  if (s.length <= cap) return s;
+  return s.slice(0, Math.max(1, cap - 1)) + "…";
+}
+
+export function escapeCell(v: unknown, charCap: number = DEFAULTS.cellCharCap): string {
+  const s = truncateString(stringifyCell(v), charCap);
   return s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ").replace(/\r/g, "");
 }
 
@@ -20,6 +30,7 @@ export function renderMarkdownTable(
   sql: string,
   connection: Connection,
   rowCap: number,
+  cellCharCap: number = DEFAULTS.cellCharCap,
 ): string {
   const hash = simpleHash(`${connection}\n${sql.trim()}`);
   const ts = new Date().toISOString();
@@ -34,9 +45,11 @@ export function renderMarkdownTable(
     return `${open}\n\n_(0 rows)_\n\n${close}`;
   }
 
-  const header = "| " + columns.map(escapeCell).join(" | ") + " |";
+  const header = "| " + columns.map((c) => escapeCell(c, cellCharCap)).join(" | ") + " |";
   const sep = "| " + columns.map(() => "---").join(" | ") + " |";
-  const body = shown.map((r) => "| " + columns.map((c) => escapeCell(r[c])).join(" | ") + " |");
+  const body = shown.map(
+    (r) => "| " + columns.map((c) => escapeCell(r[c], cellCharCap)).join(" | ") + " |",
+  );
   const emptyNotice = totalRows === 0 ? "\n\n> 0 rows" : "";
   const truncated =
     totalRows > cap ? `\n\n> … ${totalRows - cap} more rows hidden (cap ${cap})` : "";
@@ -49,6 +62,7 @@ export function renderDomTable(
   rows: Row[],
   columns: string[],
   rowCap: number,
+  cellCharCap: number = DEFAULTS.cellCharCap,
 ) {
   if (columns.length === 0) {
     parent.createEl("em", { text: "(0 rows)" });
@@ -69,8 +83,12 @@ export function renderDomTable(
     const tr = tbody.createEl("tr");
     for (const c of columns) {
       const td = tr.createEl("td");
-      const v = row[c];
-      td.setText(v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
+      const full = stringifyCell(row[c]);
+      const display = truncateString(full, cellCharCap);
+      td.setText(display);
+      if (display !== full) {
+        td.title = full;
+      }
     }
   }
 
@@ -92,4 +110,10 @@ export function normalizedRowCap(rowCap: number): number {
   return Number.isFinite(rowCap) && rowCap > 0
     ? Math.min(Math.floor(rowCap), 10000)
     : DEFAULTS.rowCap;
+}
+
+export function normalizedCellCharCap(charCap: number): number {
+  return Number.isFinite(charCap) && charCap > 0
+    ? Math.min(Math.floor(charCap), 10000)
+    : DEFAULTS.cellCharCap;
 }

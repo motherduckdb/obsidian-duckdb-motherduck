@@ -1,6 +1,13 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { escapeCell, normalizedRowCap, renderMarkdownTable, simpleHash } from "../src/table";
+import {
+  escapeCell,
+  normalizedCellCharCap,
+  normalizedRowCap,
+  renderMarkdownTable,
+  simpleHash,
+  truncateString,
+} from "../src/table";
 
 test("escapeCell produces markdown-safe table cells", () => {
   assert.equal(escapeCell("a|b\nc\\d\r"), "a\\|b c\\\\d");
@@ -13,6 +20,27 @@ test("normalizedRowCap falls back and clamps large values", () => {
   assert.equal(normalizedRowCap(Number.NaN), 100);
   assert.equal(normalizedRowCap(2.8), 2);
   assert.equal(normalizedRowCap(20000), 10000);
+});
+
+test("normalizedCellCharCap falls back and clamps large values", () => {
+  assert.equal(normalizedCellCharCap(0), 80);
+  assert.equal(normalizedCellCharCap(Number.NaN), 80);
+  assert.equal(normalizedCellCharCap(15.7), 15);
+  assert.equal(normalizedCellCharCap(50000), 10000);
+});
+
+test("truncateString slices to cap-1 chars and appends an ellipsis", () => {
+  assert.equal(truncateString("hello", 10), "hello");
+  assert.equal(truncateString("abcdefghij", 10), "abcdefghij");
+  assert.equal(truncateString("abcdefghijk", 10), "abcdefghi…");
+  assert.equal(truncateString("a really long sentence", 10), "a really …");
+});
+
+test("escapeCell truncates long values before escaping", () => {
+  const long = "a".repeat(200);
+  const out = escapeCell(long, 20);
+  assert.equal(out.length, 20);
+  assert.ok(out.endsWith("…"));
 });
 
 test("renderMarkdownTable includes connection-aware hash and escaped headers", () => {
@@ -51,4 +79,20 @@ test("renderMarkdownTable truncates rendered rows at the row cap", () => {
   assert.match(rendered, /\| 2 \|/);
   assert.doesNotMatch(rendered, /\| 3 \|/);
   assert.match(rendered, /1 more rows hidden \(cap 2\)/);
+});
+
+test("renderMarkdownTable truncates long cell values per cellCharCap", () => {
+  const long = "x".repeat(200);
+  const rendered = renderMarkdownTable(
+    [{ note: long }],
+    ["note"],
+    "select note from t",
+    "local",
+    100,
+    25,
+  );
+
+  const cellLine = rendered.split("\n").find((l) => l.startsWith("| x")) ?? "";
+  assert.ok(cellLine.includes("…"), "expected ellipsis in truncated cell line");
+  assert.ok(!cellLine.includes("x".repeat(100)), "expected no full long value");
 });
