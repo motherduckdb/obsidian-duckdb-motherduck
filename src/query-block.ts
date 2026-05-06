@@ -15,6 +15,7 @@ export interface QueryBlockHost {
     sql: string,
     connection: Connection,
   ): Promise<void>;
+  clearRenderedBlock(ctx: MarkdownPostProcessorContext, el: HTMLElement): Promise<void>;
 }
 
 export function renderQueryBlock(
@@ -43,14 +44,12 @@ export function renderQueryBlock(
   }
 
   const info = ctx.getSectionInfo(el);
-  if (info) {
-    const cachedHash = findCacheHashAfterLine(info.text, info.lineEnd);
-    if (cachedHash && cachedHash !== simpleHash(`${connection}\n${sql}`)) {
-      const warn = badge.createEl("span", { cls: "motherduck-block__stale-warn" });
-      warn.title =
-        "The frozen result below was produced by a different query or connection. Run/Freeze to update it.";
-      warn.appendText("⚠ cache stale");
-    }
+  const cachedHash = info ? findCacheHashAfterLine(info.text, info.lineEnd) : null;
+  if (cachedHash && cachedHash !== simpleHash(`${connection}\n${sql}`)) {
+    const warn = badge.createEl("span", { cls: "motherduck-block__stale-warn" });
+    warn.title =
+      "The frozen result below was produced by a different query or connection. Run/Freeze to update it.";
+    warn.appendText("⚠ cache stale");
   }
 
   attachRefreshDropdown(host, badge, ctx);
@@ -71,6 +70,15 @@ export function renderQueryBlock(
   freezeBtn.appendText("Freeze");
   freezeBtn.title = "Run and freeze result below this block";
   freezeBtn.setAttr("aria-label", "Run and freeze result below this block");
+
+  let clearBtn: HTMLButtonElement | null = null;
+  if (cachedHash) {
+    clearBtn = btnRow.createEl("button", { cls: "motherduck-block__button" });
+    setIcon(clearBtn, "eraser");
+    clearBtn.appendText("Clear");
+    clearBtn.title = "Remove the frozen result below this block";
+    clearBtn.setAttr("aria-label", "Remove the frozen result below this block");
+  }
 
   const status = btnRow.createEl("span", { cls: "motherduck-block__status" });
   const resultEl = wrap.createDiv({ cls: "motherduck-block__result" });
@@ -109,13 +117,28 @@ export function renderQueryBlock(
     }
   });
 
+  if (clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      status.setText("clearing…");
+      setButtonsDisabled(true);
+      try {
+        await host.clearRenderedBlock(ctx, el);
+        status.setText("cleared ✓");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        status.setText(`error: ${msg}`);
+        console.error("[motherduck] clear failed", e);
+      } finally {
+        setButtonsDisabled(false);
+      }
+    });
+  }
+
   function setButtonsDisabled(disabled: boolean) {
-    if (disabled) {
-      runBtn.setAttr("disabled", "true");
-      freezeBtn.setAttr("disabled", "true");
-    } else {
-      runBtn.removeAttribute("disabled");
-      freezeBtn.removeAttribute("disabled");
+    for (const btn of [runBtn, freezeBtn, clearBtn]) {
+      if (!btn) continue;
+      if (disabled) btn.setAttr("disabled", "true");
+      else btn.removeAttribute("disabled");
     }
   }
 }
