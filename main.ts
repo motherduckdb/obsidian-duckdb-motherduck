@@ -108,7 +108,7 @@ export default class MotherDuckPlugin extends Plugin {
 
     this.addCommand({
       id: "clear-freeze-at-cursor",
-      name: "Clear frozen result at cursor",
+      name: "Clear freeze at cursor",
       editorCallback: async (editor, view) => {
         if (!(view instanceof MarkdownView) || !view.file) return;
         try {
