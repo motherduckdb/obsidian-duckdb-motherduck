@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { findBlocks, writeSentinelAfterBlock } from "../src/markdown";
+import { findBlocks, findCacheHashAfterLine, writeSentinelAfterBlock } from "../src/markdown";
 
 test("findBlocks parses duckdb and motherduck fences with info text", () => {
   const blocks = findBlocks(
@@ -86,4 +86,48 @@ test("writeSentinelAfterBlock replaces an existing frozen result", () => {
   assert.match(updated, /hash=new/);
   assert.doesNotMatch(updated, /hash=old|old/);
   assert.match(updated, /\nafter$/);
+});
+
+test("findCacheHashAfterLine returns the hash from the next sentinel", () => {
+  const content = [
+    "```duckdb",          // 0
+    "select 1",           // 1
+    "```",                // 2 ← lineEnd
+    "",                   // 3
+    "<!-- md:cache hash=abc12345 conn=local ts=2026-05-06T00:00:00Z rows=1 -->", // 4
+    "",                   // 5
+    "| x |",              // 6
+    "| - |",              // 7
+    "| 1 |",              // 8
+    "",                   // 9
+    "<!-- md:cache-end -->", // 10
+  ].join("\n");
+
+  assert.equal(findCacheHashAfterLine(content, 2), "abc12345");
+});
+
+test("findCacheHashAfterLine returns null when there is no cache", () => {
+  const content = [
+    "```duckdb",
+    "select 1",
+    "```",
+    "",
+    "regular paragraph",
+  ].join("\n");
+
+  assert.equal(findCacheHashAfterLine(content, 2), null);
+});
+
+test("findCacheHashAfterLine ignores caches separated by other content", () => {
+  const content = [
+    "```duckdb",
+    "select 1",
+    "```",
+    "",
+    "intervening text",
+    "<!-- md:cache hash=deadbeef conn=local ts=t rows=0 -->",
+    "<!-- md:cache-end -->",
+  ].join("\n");
+
+  assert.equal(findCacheHashAfterLine(content, 2), null);
 });

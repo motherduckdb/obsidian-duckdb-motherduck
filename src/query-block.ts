@@ -1,7 +1,8 @@
 import { App, MarkdownPostProcessorContext, Notice, TFile, setIcon } from "obsidian";
 import { DUCKDB_ICON, MOTHERDUCK_ICON } from "./icons";
+import { findCacheHashAfterLine } from "./markdown";
 import { shortPathLabel } from "./path";
-import { renderDomTable } from "./table";
+import { renderDomTable, simpleHash } from "./table";
 import type { Connection, QueryRunResult, Settings } from "./types";
 
 export interface QueryBlockHost {
@@ -39,6 +40,17 @@ export function renderQueryBlock(
   } else {
     badge.createEl("span", { text: "DuckDB " });
     badge.createEl("code", { text: shortPathLabel(host.settings.dbPath) });
+  }
+
+  const info = ctx.getSectionInfo(el);
+  if (info) {
+    const cachedHash = findCacheHashAfterLine(info.text, info.lineEnd);
+    if (cachedHash && cachedHash !== simpleHash(`${connection}\n${sql}`)) {
+      const warn = badge.createEl("span", { cls: "motherduck-block__stale-warn" });
+      warn.title =
+        "The frozen result below was produced by a different query or connection. Run/Freeze to update it.";
+      warn.appendText("⚠ cache stale");
+    }
   }
 
   attachRefreshDropdown(host, badge, ctx);

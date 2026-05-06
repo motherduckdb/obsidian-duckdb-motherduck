@@ -67,3 +67,12 @@ export function writeSentinelAfterBlock(
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+export function findCacheHashAfterLine(content: string, lineEnd: number): string | null {
+  const lines = content.split("\n");
+  let j = lineEnd + 1;
+  while (j < lines.length && lines[j].trim() === "") j++;
+  if (j >= lines.length) return null;
+  const m = lines[j].match(/<!-- md:cache hash=([0-9a-f]+)/);
+  return m ? m[1] : null;
+}
