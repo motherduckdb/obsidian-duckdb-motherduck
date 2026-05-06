@@ -75,7 +75,7 @@ export function renderQueryBlock(
   if (cachedHash) {
     clearBtn = btnRow.createEl("button", { cls: "motherduck-block__button" });
     setIcon(clearBtn, "eraser");
-    clearBtn.appendText("Clear");
+    clearBtn.appendText("Clear freeze");
     clearBtn.title = "Remove the frozen result below this block";
     clearBtn.setAttr("aria-label", "Remove the frozen result below this block");
   }
