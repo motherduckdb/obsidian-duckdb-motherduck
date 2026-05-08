@@ -71,9 +71,19 @@ Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** sett
 - A bare filename like `notes.duckdb` for a persistent database in browser-managed storage (Origin Private File System). Survives Obsidian restart, full read/write, lives outside your vault.
 - An absolute path like `/Users/you/data.duckdb` or `C:\Users\you\data.duckdb` to query an existing `.duckdb` file from disk. **Read-only**: writes succeed inside the worker but don't persist back to the file.
 
-## Install (manual, for now)
+## Install
 
-The plugin isn't in the Obsidian community store yet. To install:
+The plugin isn't in the Obsidian community store yet — the review queue is deep, so until it lands the easiest path is BRAT.
+
+### Recommended: via BRAT
+
+1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Settings → Community plugins.
+2. Open BRAT's settings → **Add beta plugin** → paste the repository: `motherduckdb/obsidian-duckdb-motherduck`.
+3. BRAT will pull the latest tagged release and install it. Enable *DuckDB & MotherDuck* in Settings → Community plugins.
+
+BRAT also keeps the plugin updated when new releases ship.
+
+### Manual
 
 1. Clone this repo.
 2. `npm install && npm run build`, produces `main.js`.

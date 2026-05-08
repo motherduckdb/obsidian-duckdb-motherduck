@@ -1,4 +1,13 @@
-import { App, MarkdownPostProcessorContext, Notice, TFile, setIcon } from "obsidian";
+import {
+  App,
+  MarkdownPostProcessorContext,
+  MarkdownRenderChild,
+  MarkdownRenderer,
+  MarkdownView,
+  Notice,
+  TFile,
+  setIcon,
+} from "obsidian";
 import { DUCKDB_ICON, MOTHERDUCK_ICON } from "./icons";
 import { findCacheHashAfterLine } from "./markdown";
 import { shortPathLabel } from "./path";
@@ -16,6 +25,8 @@ export interface QueryBlockHost {
     connection: Connection,
   ): Promise<void>;
   clearRenderedBlock(ctx: MarkdownPostProcessorContext, el: HTMLElement): Promise<void>;
+  isBlockCollapsed(key: string): boolean;
+  setBlockCollapsed(key: string, collapsed: boolean): void;
 }
 
 export function renderQueryBlock(
@@ -33,6 +44,10 @@ export function renderQueryBlock(
 
   const wrap = el.createDiv({ cls: "motherduck-block" });
   const badge = wrap.createDiv({ cls: "motherduck-block__badge" });
+
+  const collapseBtn = badge.createEl("button", { cls: "motherduck-block__collapse" });
+  collapseBtn.setAttr("type", "button");
+
   const iconWrap = badge.createDiv({ cls: "motherduck-block__engine-icon" });
   iconWrap.innerHTML = connection === "cloud" ? MOTHERDUCK_ICON : DUCKDB_ICON;
 
@@ -54,8 +69,42 @@ export function renderQueryBlock(
 
   attachRefreshDropdown(host, badge, ctx);
 
-  const pre = wrap.createEl("pre", { cls: "motherduck-block__sql" });
-  pre.createEl("code", { text: sql });
+  const sqlHost = wrap.createDiv({ cls: "motherduck-block__sql motherduck-block__sql--editable" });
+  sqlHost.title = "Click to edit";
+  const sqlChild = new MarkdownRenderChild(sqlHost);
+  ctx.addChild(sqlChild);
+  void MarkdownRenderer.render(
+    host.app,
+    "```sql\n" + sql + "\n```",
+    sqlHost,
+    ctx.sourcePath,
+    sqlChild,
+  );
+
+  sqlHost.addEventListener("click", (evt) => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+
+    const sectionInfo = ctx.getSectionInfo(el);
+    if (!sectionInfo) return;
+    const view = host.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+
+    const goToLine = sectionInfo.lineStart + 1;
+    const place = () => {
+      view.editor.focus();
+      view.editor.setCursor({ line: goToLine, ch: 0 });
+    };
+    if (view.getMode() !== "source") {
+      const state = view.getState();
+      void view
+        .setState({ ...state, mode: "source" }, { history: false })
+        .then(place);
+    } else {
+      place();
+    }
+    evt.preventDefault();
+  });
 
   const btnRow = wrap.createDiv({ cls: "motherduck-block__controls" });
 
@@ -82,6 +131,21 @@ export function renderQueryBlock(
 
   const status = btnRow.createEl("span", { cls: "motherduck-block__status" });
   const resultEl = wrap.createDiv({ cls: "motherduck-block__result" });
+
+  const collapseKey = `${ctx.sourcePath}::${simpleHash(`${connection}\n${sql}`)}`;
+  const applyCollapsed = (collapsed: boolean) => {
+    wrap.toggleClass("motherduck-block--collapsed", collapsed);
+    setIcon(collapseBtn, collapsed ? "chevron-right" : "chevron-down");
+    collapseBtn.setAttr("aria-label", collapsed ? "Expand SQL block" : "Collapse SQL block");
+    collapseBtn.title = collapsed ? "Expand" : "Collapse";
+  };
+  applyCollapsed(host.isBlockCollapsed(collapseKey));
+  collapseBtn.addEventListener("click", (evt) => {
+    evt.stopPropagation();
+    const next = !wrap.hasClass("motherduck-block--collapsed");
+    host.setBlockCollapsed(collapseKey, next);
+    applyCollapsed(next);
+  });
 
   runBtn.addEventListener("click", async () => {
     resultEl.empty();
