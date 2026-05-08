@@ -32,6 +32,7 @@ export default class MotherDuckPlugin extends Plugin {
   private sweepTimeout: number | null = null;
   private sweepInterval: number | null = null;
   private sweepRunning = false;
+  private collapsedBlocks = new Map<string, boolean>();
   api!: {
     refreshFile: (path: string) => Promise<string>;
     runQuery: (sql: string, connection?: Connection) => Promise<QueryRunResult>;
@@ -157,6 +158,15 @@ export default class MotherDuckPlugin extends Plugin {
 
   async resetRuntimes(only?: Connection) {
     await this.runtimeManager.reset(only);
+  }
+
+  isBlockCollapsed(key: string): boolean {
+    return this.collapsedBlocks.get(key) === true;
+  }
+
+  setBlockCollapsed(key: string, collapsed: boolean): void {
+    if (collapsed) this.collapsedBlocks.set(key, true);
+    else this.collapsedBlocks.delete(key);
   }
 
   async runQuery(
