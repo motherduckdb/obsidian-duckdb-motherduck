@@ -54,9 +54,23 @@
 }
 
 .motherduck-block__sql {
-  margin: 0 0 8px;
+  margin: 0 0 14px;
   overflow-x: auto;
   font-size: var(--font-ui-smaller);
+}
+
+.motherduck-block__sql > pre {
+  margin: 0;
+  overflow-x: auto;
+}
+
+.motherduck-block__sql--editable {
+  cursor: text;
+  border-radius: 4px;
+}
+
+.motherduck-block__sql--editable:hover {
+  background: var(--background-modifier-hover);
 }
 
 .motherduck-block__controls {
@@ -64,6 +78,51 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.motherduck-block__collapse {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 2px;
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.motherduck-block__collapse:hover {
+  color: var(--text-normal);
+}
+
+.motherduck-block__collapse svg {
+  width: 14px;
+  height: 14px;
+}
+
+.motherduck-block--collapsed .motherduck-block__sql,
+.motherduck-block--collapsed .motherduck-block__controls,
+.motherduck-block--collapsed .motherduck-block__result {
+  display: none;
+}
+
+.motherduck-block--collapsed .motherduck-block__badge {
+  margin-bottom: 0;
+}
+
+.motherduck-test-status {
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+.motherduck-test-status--ok {
+  color: var(--text-success);
+}
+
+.motherduck-test-status--err {
+  color: var(--text-error);
 }
 
 .motherduck-block__button {
