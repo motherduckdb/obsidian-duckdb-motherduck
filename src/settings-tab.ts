@@ -63,6 +63,7 @@ export class SettingsTab extends PluginSettingTab {
           }),
       );
 
+    let duckdbStatusEl: HTMLSpanElement;
     new Setting(this.containerEl)
       .setName("Test DuckDB connection")
       .setDesc("Runs a tiny local query using the current DuckDB setting.")
@@ -70,18 +71,24 @@ export class SettingsTab extends PluginSettingTab {
         b.setButtonText("Test").onClick(async () => {
           b.setDisabled(true);
           b.setButtonText("Testing...");
+          resetTestStatus(duckdbStatusEl);
           try {
             const result = await this.plugin.runQuery("SELECT 42 AS ok", "local");
             new Notice(`DuckDB ok (${result.rows.length} row)`);
+            showTestStatus(duckdbStatusEl, "ok");
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             new Notice(`DuckDB error: ${msg}`);
+            showTestStatus(duckdbStatusEl, "err");
           } finally {
             b.setDisabled(false);
             b.setButtonText("Test");
           }
         }),
-      );
+      )
+      .then((s) => {
+        duckdbStatusEl = s.controlEl.createSpan({ cls: "motherduck-test-status" });
+      });
 
     renderSectionHeader(this.containerEl, MOTHERDUCK_ICON, "MotherDuck", {
       text: "Used by ```motherduck code blocks. ",
@@ -129,6 +136,7 @@ export class SettingsTab extends PluginSettingTab {
           });
       });
 
+    let mdStatusEl: HTMLSpanElement;
     new Setting(this.containerEl)
       .setName("Test MotherDuck connection")
       .setDesc("Runs a tiny cloud query using the current token.")
@@ -136,18 +144,24 @@ export class SettingsTab extends PluginSettingTab {
         b.setButtonText("Test").onClick(async () => {
           b.setDisabled(true);
           b.setButtonText("Testing...");
+          resetTestStatus(mdStatusEl);
           try {
             const result = await this.plugin.runQuery("SELECT 42 AS ok", "cloud");
             new Notice(`MotherDuck ok (${result.rows.length} row)`);
+            showTestStatus(mdStatusEl, "ok");
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             new Notice(`MotherDuck error: ${msg}`);
+            showTestStatus(mdStatusEl, "err");
           } finally {
             b.setDisabled(false);
             b.setButtonText("Test");
           }
         }),
-      );
+      )
+      .then((s) => {
+        mdStatusEl = s.controlEl.createSpan({ cls: "motherduck-test-status" });
+      });
 
     this.containerEl.createEl("h3", { text: "Scheduled refresh" });
 
@@ -335,6 +349,21 @@ export class SettingsTab extends PluginSettingTab {
         this.display();
       }),
     );
+  }
+}
+
+function resetTestStatus(el: HTMLSpanElement | undefined) {
+  if (!el) return;
+  el.empty();
+  el.removeClass("motherduck-test-status--ok", "motherduck-test-status--err");
+}
+
+function showTestStatus(el: HTMLSpanElement | undefined, kind: "ok" | "err") {
+  if (!el) return;
+  el.setText(kind === "ok" ? "✓" : "✗");
+  el.addClass(kind === "ok" ? "motherduck-test-status--ok" : "motherduck-test-status--err");
+  if (kind === "ok") {
+    window.setTimeout(() => resetTestStatus(el), 4000);
   }
 }
 
