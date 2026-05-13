@@ -9,18 +9,16 @@ import workerEh from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js";
 import workerMvp from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js";
 import { Row, QueryResult, Runtime, normalizeValue } from "./index";
 
-// Electron's renderer exposes Node's `require`. Used to read real disk files
-// for read-only queries via DuckDB-Wasm's registerFileBuffer. Not available
-// in browsers / mobile Obsidian, in which case file:// paths will surface a
-// clear error to the user.
-// Uses `globalThis` (not `window`) because `require` is a runtime feature of
-// the V8/Node bridge, not per-window. `activeWindow.require` would be wrong
-// in popout windows; `globalThis.require` resolves to the same Node bridge.
+// Electron's renderer exposes Node's `require` on the main renderer's
+// `window`. Used to read real disk files for read-only queries via
+// DuckDB-Wasm's registerFileBuffer. Not available in browsers / mobile
+// Obsidian, in which case file:// paths surface a clear error to the user.
+// Captured once at module load (against the main renderer's `window`);
+// popout windows share the same Node integration, so the captured handle
+// remains valid across windows.
 const NODE_REQUIRE: ((mod: string) => unknown) | null =
-  // eslint-disable-next-line obsidianmd/no-global-this
-  typeof (globalThis as unknown as { require?: unknown }).require === "function"
-    ? // eslint-disable-next-line obsidianmd/no-global-this
-      ((globalThis as unknown as { require: (m: string) => unknown }).require)
+  typeof (window as unknown as { require?: unknown }).require === "function"
+    ? (window as unknown as { require: (m: string) => unknown }).require
     : null;
 
 // Pin to a known-good version; the .wasm binaries are fetched from jsDelivr at
