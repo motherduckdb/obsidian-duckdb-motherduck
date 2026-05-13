@@ -246,7 +246,7 @@ export class SettingsTab extends PluginSettingTab {
 
     this.renderActivityLog();
 
-    new Setting(this.containerEl).setName("General").setHeading();
+    new Setting(this.containerEl).setName("Result rendering").setHeading();
 
     new Setting(this.containerEl)
       .setName("Row cap")
@@ -317,7 +317,7 @@ export class SettingsTab extends PluginSettingTab {
         e.preventDefault();
         const f = this.plugin.app.vault.getAbstractFileByPath(entry.path);
         if (f instanceof TFile) {
-          this.plugin.app.workspace.getLeaf().openFile(f);
+          void this.plugin.app.workspace.getLeaf().openFile(f);
         }
       });
 
