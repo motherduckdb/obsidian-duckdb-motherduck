@@ -147,7 +147,7 @@ export default class MotherDuckPlugin extends Plugin {
   // actually awaits the returned Promise — the official sample plugin uses
   // `async` here too. Wrapping with `void asyncFn()` would fire-and-forget
   // and lose the "settings loaded before plugin reports ready" guarantee.
-  // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Obsidian's Plugin types onunload as () => void but the framework actually awaits the Promise; matches the official obsidian-sample-plugin pattern.
   async onunload() {
     this.stopScheduler();
     await this.resetRuntimes();
