@@ -13,9 +13,14 @@ import { Row, QueryResult, Runtime, normalizeValue } from "./index";
 // for read-only queries via DuckDB-Wasm's registerFileBuffer. Not available
 // in browsers / mobile Obsidian, in which case file:// paths will surface a
 // clear error to the user.
+// Uses `globalThis` (not `window`) because `require` is a runtime feature of
+// the V8/Node bridge, not per-window. `activeWindow.require` would be wrong
+// in popout windows; `globalThis.require` resolves to the same Node bridge.
 const NODE_REQUIRE: ((mod: string) => unknown) | null =
+  // eslint-disable-next-line obsidianmd/no-global-this
   typeof (globalThis as unknown as { require?: unknown }).require === "function"
-    ? ((globalThis as unknown as { require: (m: string) => unknown }).require)
+    ? // eslint-disable-next-line obsidianmd/no-global-this
+      ((globalThis as unknown as { require: (m: string) => unknown }).require)
     : null;
 
 // Pin to a known-good version; the .wasm binaries are fetched from jsDelivr at

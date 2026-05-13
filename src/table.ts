@@ -10,7 +10,13 @@ export function simpleHash(s: string): string {
 
 export function stringifyCell(v: unknown): string {
   if (v === null || v === undefined) return "";
-  return typeof v === "object" ? JSON.stringify(v) : String(v);
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") {
+    return v.toString();
+  }
+  // Object / array / Date / etc. — JSON.stringify avoids the default
+  // `[object Object]` fall-through that String() would produce.
+  return JSON.stringify(v);
 }
 
 export function truncateString(s: string, charCap: number): string {
