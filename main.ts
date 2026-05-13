@@ -139,8 +139,6 @@ export default class MotherDuckPlugin extends Plugin {
     if (this.settings.scheduleEnabled) {
       this.startScheduler();
     }
-
-    console.log("[motherduck] loaded");
   }
 
   async onunload() {
@@ -385,7 +383,6 @@ export default class MotherDuckPlugin extends Plugin {
     stampPredicate?: (file: TFile) => boolean;
   }): Promise<SweepResult> {
     if (this.sweepRunning) {
-      console.log("[motherduck] sweep skipped: previous sweep still running");
       return { refreshed: 0, errored: 0, checked: 0 };
     }
 
@@ -401,7 +398,6 @@ export default class MotherDuckPlugin extends Plugin {
 
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile?.path === file.path) {
-          console.log(`[motherduck] sweep: skipping ${file.path}, active editor`);
           continue;
         }
 
@@ -505,9 +501,6 @@ export default class MotherDuckPlugin extends Plugin {
         errored: 0,
         errorMessage: `Auto-unscheduled after ${AUTO_DISABLE_FAILURE_THRESHOLD} consecutive failures`,
       });
-      console.log(
-        `[motherduck] auto-unscheduled ${file.path} after ${count} consecutive failures`,
-      );
     } catch (e) {
       console.error("[motherduck] auto-unschedule failed", e);
     }
