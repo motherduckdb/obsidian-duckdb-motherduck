@@ -182,17 +182,20 @@ npm run dev       # watch mode, rebuilds on save
 
 `main.js` ends up around 2 MB because the local DuckDB WASM worker script is bundled inline. The `.wasm` binary itself is fetched from jsDelivr at runtime (see *Remote assets*).
 
-## Remote assets
+## Network access
 
-When a `duckdb` block runs, the plugin fetches the DuckDB WASM binary (~7 MB gzipped) from jsDelivr the first time:
+The plugin makes network calls only in response to actions you take. There is **no telemetry**, **no analytics**, **no calls to motherduck.com or any third-party for any reason other than fulfilling a SQL query or fetching a WASM runtime you triggered**.
 
-```
-https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@<version>/dist/duckdb-eh.wasm
-```
+Concretely:
 
-When a `motherduck` block runs, the MotherDuck WASM extension and its DuckDB worker bundle are fetched from `https://app.motherduck.com/duckdb-wasm-assets/<version>/` during connection setup.
+| When | What | Where | Sends |
+| --- | --- | --- | --- |
+| First time a `duckdb` block runs | DuckDB WASM binary (~7 MB gzipped), once, then browser-cached | `https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@<version>/dist/duckdb-eh.wasm` | nothing — public CDN GET |
+| First time a `motherduck` block runs | MotherDuck WASM extension + DuckDB worker bundle | `https://app.motherduck.com/duckdb-wasm-assets/<version>/` | nothing — public assets GET |
+| Every `motherduck` block run (including scheduled refresh) | Your SQL query and your token | Your MotherDuck workspace | your SQL + your token |
+| Scheduled refresh sweep (when enabled) | An hourly sweep checks frontmatter-opted-in notes and re-runs their blocks. Only `motherduck` blocks make network calls; `duckdb` blocks stay local. The sweep itself does no network I/O — it walks the vault and triggers blocks. | Same as the row above (only `motherduck` blocks touch the network) | Same as above |
 
-Both are cached by the browser. No other network activity is added by the plugin.
+Scheduled refresh is **off by default** and opted into per-note via the `Refresh: daily/weekly` dropdown above any SQL block, which writes `duckdb-motherduck-refresh: daily|weekly` to that note's frontmatter. Toggle it off globally in Settings → *Auto-refresh scheduled notes*.
 
 ## Requirements
 
