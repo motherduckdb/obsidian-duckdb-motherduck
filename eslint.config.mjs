@@ -2,14 +2,9 @@ import tsParser from "@typescript-eslint/parser";
 import obsidianmd from "eslint-plugin-obsidianmd";
 import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
 
-// Note: `eslint-plugin-obsidianmd@0.3.0` recommended config does NOT include
-// directive-comment rules; the Obsidian Community dashboard scan layers them
-// on top. Add them here so `npm run lint` reproduces the dashboard's findings.
-
-const RESTRICTED_DISABLES = [
-  // Critical rules the dashboard does not let plugin authors silence.
-  "obsidianmd/no-global-this",
-];
+// `eslint-plugin-obsidianmd@0.3.0`'s recommended config doesn't enforce
+// directive-comment hygiene; the Community dashboard scan does. Pull in
+// `require-description` so any `eslint-disable` has to carry a rationale.
 
 export default [
   {
@@ -40,14 +35,7 @@ export default [
     },
     rules: {
       "obsidianmd/ui/sentence-case": "off",
-      "@eslint-community/eslint-comments/require-description": [
-        "error",
-        { ignore: [] },
-      ],
-      "@eslint-community/eslint-comments/no-restricted-disable": [
-        "error",
-        ...RESTRICTED_DISABLES,
-      ],
+      "@eslint-community/eslint-comments/require-description": "error",
     },
   },
 ];
