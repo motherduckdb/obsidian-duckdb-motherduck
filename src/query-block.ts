@@ -8,7 +8,7 @@ import {
   TFile,
   setIcon,
 } from "obsidian";
-import { DUCKDB_ICON, MOTHERDUCK_ICON } from "./icons";
+import { createDuckdbIcon, createMotherduckIcon } from "./icons";
 import { findCacheHashAfterLine } from "./markdown";
 import { shortPathLabel } from "./path";
 import { renderDomTable, simpleHash } from "./table";
@@ -49,7 +49,7 @@ export function renderQueryBlock(
   collapseBtn.setAttr("type", "button");
 
   const iconWrap = badge.createDiv({ cls: "motherduck-block__engine-icon" });
-  iconWrap.innerHTML = connection === "cloud" ? MOTHERDUCK_ICON : DUCKDB_ICON;
+  iconWrap.appendChild(connection === "cloud" ? createMotherduckIcon() : createDuckdbIcon());
 
   if (connection === "cloud") {
     badge.createEl("span", { text: "MotherDuck" });

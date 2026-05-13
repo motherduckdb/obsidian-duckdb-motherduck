@@ -1,5 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting, TFile, type Plugin } from "obsidian";
-import { DUCKDB_ICON, MOTHERDUCK_ICON } from "./icons";
+import { createDuckdbIcon, createMotherduckIcon } from "./icons";
 import { formatLogTimestamp } from "./schedule";
 import type { Connection, QueryRunResult, Settings, SweepResult } from "./types";
 
@@ -29,7 +29,7 @@ export class SettingsTab extends PluginSettingTab {
         "Results render live, and can be frozen as inline markdown tables, either per-block via the Freeze button or in bulk via the 'Refresh all queries' command.",
     );
 
-    renderSectionHeader(this.containerEl, DUCKDB_ICON, "DuckDB", {
+    renderSectionHeader(this.containerEl, createDuckdbIcon, "DuckDB", {
       text: "Used by ```duckdb code blocks. ",
       linkText: "duckdb.org",
       href: "https://duckdb.org",
@@ -90,7 +90,7 @@ export class SettingsTab extends PluginSettingTab {
         duckdbStatusEl = s.controlEl.createSpan({ cls: "motherduck-test-status" });
       });
 
-    renderSectionHeader(this.containerEl, MOTHERDUCK_ICON, "MotherDuck", {
+    renderSectionHeader(this.containerEl, createMotherduckIcon, "MotherDuck", {
       text: "Used by ```motherduck code blocks. ",
       linkText: "motherduck.com",
       href: "https://motherduck.com",
@@ -163,7 +163,7 @@ export class SettingsTab extends PluginSettingTab {
         mdStatusEl = s.controlEl.createSpan({ cls: "motherduck-test-status" });
       });
 
-    this.containerEl.createEl("h3", { text: "Scheduled refresh" });
+    new Setting(this.containerEl).setName("Scheduled refresh").setHeading();
 
     const scheduleDesc = this.containerEl.createEl("p", { cls: "setting-item-description" });
     scheduleDesc.appendText("Pick a cadence in the ");
@@ -246,7 +246,7 @@ export class SettingsTab extends PluginSettingTab {
 
     this.renderActivityLog();
 
-    this.containerEl.createEl("h3", { text: "General" });
+    new Setting(this.containerEl).setName("General").setHeading();
 
     new Setting(this.containerEl)
       .setName("Row cap")
@@ -284,9 +284,7 @@ export class SettingsTab extends PluginSettingTab {
   }
 
   private renderActivityLog() {
-    const logTitle = this.containerEl.createEl("h4", { text: "Activity log" });
-    logTitle.style.marginTop = "16px";
-    logTitle.style.marginBottom = "4px";
+    new Setting(this.containerEl).setName("Activity log").setHeading();
 
     if (this.plugin.settings.refreshLog.length === 0) {
       this.containerEl.createEl("p", {
@@ -296,27 +294,25 @@ export class SettingsTab extends PluginSettingTab {
       return;
     }
 
-    const logEl = this.containerEl.createDiv();
-    logEl.style.maxHeight = "300px";
-    logEl.style.overflowY = "auto";
-    logEl.style.border = "1px solid var(--background-modifier-border)";
-    logEl.style.borderRadius = "6px";
-    logEl.style.padding = "8px";
-    logEl.style.fontSize = "0.85em";
-    logEl.style.fontFamily = "var(--font-monospace)";
-    logEl.style.lineHeight = "1.5";
+    const logEl = this.containerEl.createDiv({ cls: "motherduck-activity-log" });
 
     for (const entry of this.plugin.settings.refreshLog.slice(0, 30)) {
       const row = logEl.createDiv();
-      const ts = row.createEl("span", { text: formatLogTimestamp(entry.ts) });
-      ts.style.opacity = "0.7";
+      row.createEl("span", {
+        text: formatLogTimestamp(entry.ts),
+        cls: "motherduck-activity-log__muted",
+      });
       row.appendText("  ");
-      const trigger = row.createEl("span", { text: entry.trigger });
-      trigger.style.opacity = "0.7";
+      row.createEl("span", {
+        text: entry.trigger,
+        cls: "motherduck-activity-log__muted",
+      });
       row.appendText("  ");
 
-      const linkEl = row.createEl("a", { text: entry.path });
-      linkEl.style.cursor = "pointer";
+      const linkEl = row.createEl("a", {
+        text: entry.path,
+        cls: "motherduck-activity-log__link",
+      });
       linkEl.addEventListener("click", (e) => {
         e.preventDefault();
         const f = this.plugin.app.vault.getAbstractFileByPath(entry.path);
@@ -327,17 +323,19 @@ export class SettingsTab extends PluginSettingTab {
 
       if (entry.blocks === 0 && entry.errored === 0 && entry.errorMessage) {
         row.appendText("  ");
-        const err = row.createEl("span", { text: `error: ${entry.errorMessage}` });
-        err.style.color = "var(--text-error)";
+        row.createEl("span", {
+          text: `error: ${entry.errorMessage}`,
+          cls: "motherduck-activity-log__err",
+        });
       } else {
         row.appendText(`  ${entry.blocks} refreshed`);
         if (entry.errored > 0) {
-          const err = row.createEl("span", {
+          row.createEl("span", {
             text: entry.errorMessage
               ? `, ${entry.errored} errored: ${entry.errorMessage}`
               : `, ${entry.errored} errored`,
+            cls: "motherduck-activity-log__err",
           });
-          err.style.color = "var(--text-error)";
         }
       }
     }
@@ -369,31 +367,28 @@ function showTestStatus(el: HTMLSpanElement | undefined, kind: "ok" | "err") {
 
 function renderSectionHeader(
   parent: HTMLElement,
-  svgMarkup: string,
+  createIcon: () => SVGSVGElement,
   title: string,
   tagline?: { text: string; linkText: string; href: string },
 ) {
-  const row = parent.createDiv();
-  row.style.display = "flex";
-  row.style.alignItems = "center";
-  row.style.gap = "10px";
-  row.style.marginTop = "24px";
-  row.style.marginBottom = tagline ? "4px" : "8px";
-  row.style.paddingBottom = "6px";
-  row.style.borderBottom = "1px solid var(--background-modifier-border)";
+  const row = parent.createDiv({
+    cls: tagline
+      ? "motherduck-settings-section"
+      : "motherduck-settings-section motherduck-settings-section--no-tagline",
+  });
 
-  const iconWrap = row.createDiv();
-  iconWrap.style.display = "flex";
-  iconWrap.style.alignItems = "center";
-  iconWrap.innerHTML = svgMarkup;
+  const iconWrap = row.createDiv({ cls: "motherduck-settings-section__icon" });
+  iconWrap.appendChild(createIcon());
 
-  const h = row.createEl("h3", { text: title });
-  h.style.margin = "0";
+  row.createEl("h3", {
+    text: title,
+    cls: "motherduck-settings-section__title",
+  });
 
   if (tagline) {
-    const desc = parent.createEl("p", { cls: "setting-item-description" });
-    desc.style.marginTop = "0";
-    desc.style.marginBottom = "8px";
+    const desc = parent.createEl("p", {
+      cls: "setting-item-description motherduck-settings-section__tagline",
+    });
     desc.appendText(tagline.text);
     const a = desc.createEl("a", { href: tagline.href, text: tagline.linkText });
     a.setAttr("target", "_blank");
