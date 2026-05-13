@@ -54,3 +54,21 @@ export const DEFAULTS: Settings = {
 };
 
 export const AUTO_DISABLE_FAILURE_THRESHOLD = 3;
+
+// Shape of the plugin-managed frontmatter keys. Obsidian's frontmatter is
+// typed as `any` upstream; this gives us a narrow lens for our own keys
+// without claiming knowledge of the rest of the file's properties.
+export interface DuckDbFrontmatter {
+  "duckdb-motherduck-refresh"?: unknown;
+  "duckdb-motherduck-refresh-last"?: unknown;
+  [k: string]: unknown;
+}
+
+// Narrow Obsidian's `any`-typed frontmatter to our typed lens. The cast
+// goes through `unknown` so @typescript-eslint/no-unsafe-* doesn't keep
+// propagating `any` through every property access at the call site.
+export function asDuckDbFrontmatter(
+  fm: unknown,
+): DuckDbFrontmatter | undefined {
+  return fm && typeof fm === "object" ? (fm as DuckDbFrontmatter) : undefined;
+}

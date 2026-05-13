@@ -12,7 +12,7 @@ import { createDuckdbIcon, createMotherduckIcon } from "./icons";
 import { findCacheHashAfterLine } from "./markdown";
 import { shortPathLabel } from "./path";
 import { renderDomTable, simpleHash } from "./table";
-import type { Connection, QueryRunResult, Settings } from "./types";
+import { asDuckDbFrontmatter, type Connection, type DuckDbFrontmatter, type QueryRunResult, type Settings } from "./types";
 
 export interface QueryBlockHost {
   app: App;
@@ -147,66 +147,72 @@ export function renderQueryBlock(
     applyCollapsed(next);
   });
 
-  runBtn.addEventListener("click", async () => {
-    resultEl.empty();
-    status.setText("running…");
-    setButtonsDisabled(true);
-    const t0 = performance.now();
-    try {
-      const { rows, columns, truncated } = await host.runQuery(
-        sql,
-        connection,
-        host.settings.rowCap,
-      );
-      const dt = Math.round(performance.now() - t0);
-      const rowsLabel = truncated ? `${rows.length}+ row(s)` : `${rows.length} row(s)`;
-      status.setText(`${rowsLabel} · ${dt} ms`);
-      renderDomTable(
-        resultEl,
-        rows,
-        columns,
-        host.settings.rowCap,
-        host.settings.cellCharCap,
-        truncated,
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      status.setText("error");
-      resultEl.createEl("pre", { cls: "motherduck-block__error", text: msg });
-    } finally {
-      setButtonsDisabled(false);
-    }
-  });
-
-  freezeBtn.addEventListener("click", async () => {
-    status.setText("freezing…");
-    setButtonsDisabled(true);
-    try {
-      await host.freezeRenderedBlock(ctx, el, sql, connection);
-      status.setText("frozen ✓");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      status.setText(`error: ${msg}`);
-      console.error("[motherduck] freeze failed", e);
-    } finally {
-      setButtonsDisabled(false);
-    }
-  });
-
-  if (clearBtn) {
-    clearBtn.addEventListener("click", async () => {
-      status.setText("clearing…");
+  runBtn.addEventListener("click", () => {
+    void (async () => {
+      resultEl.empty();
+      status.setText("running…");
       setButtonsDisabled(true);
+      const t0 = performance.now();
       try {
-        await host.clearRenderedBlock(ctx, el);
-        status.setText("cleared ✓");
+        const { rows, columns, truncated } = await host.runQuery(
+          sql,
+          connection,
+          host.settings.rowCap,
+        );
+        const dt = Math.round(performance.now() - t0);
+        const rowsLabel = truncated ? `${rows.length}+ row(s)` : `${rows.length} row(s)`;
+        status.setText(`${rowsLabel} · ${dt} ms`);
+        renderDomTable(
+          resultEl,
+          rows,
+          columns,
+          host.settings.rowCap,
+          host.settings.cellCharCap,
+          truncated,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        status.setText(`error: ${msg}`);
-        console.error("[motherduck] clear failed", e);
+        status.setText("error");
+        resultEl.createEl("pre", { cls: "motherduck-block__error", text: msg });
       } finally {
         setButtonsDisabled(false);
       }
+    })();
+  });
+
+  freezeBtn.addEventListener("click", () => {
+    void (async () => {
+      status.setText("freezing…");
+      setButtonsDisabled(true);
+      try {
+        await host.freezeRenderedBlock(ctx, el, sql, connection);
+        status.setText("frozen ✓");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        status.setText(`error: ${msg}`);
+        console.error("[motherduck] freeze failed", e);
+      } finally {
+        setButtonsDisabled(false);
+      }
+    })();
+  });
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      void (async () => {
+        status.setText("clearing…");
+        setButtonsDisabled(true);
+        try {
+          await host.clearRenderedBlock(ctx, el);
+          status.setText("cleared ✓");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          status.setText(`error: ${msg}`);
+          console.error("[motherduck] clear failed", e);
+        } finally {
+          setButtonsDisabled(false);
+        }
+      })();
     });
   }
 
@@ -231,7 +237,7 @@ function attachRefreshDropdown(
   const iconHost = group.createDiv({ cls: "motherduck-refresh-control__icon" });
   setIcon(iconHost, "refresh-cw");
 
-  const select = group.createEl("select", { cls: "motherduck-refresh-control__select" }) as HTMLSelectElement;
+  const select = group.createEl("select", { cls: "motherduck-refresh-control__select" });
   select.title = "Auto-refresh this note (writes to its frontmatter)";
   select.setAttr("aria-label", "Auto-refresh this note");
 
@@ -246,23 +252,27 @@ function attachRefreshDropdown(
     o.text = opt.label;
   }
 
-  const fm = host.app.metadataCache.getFileCache(file)?.frontmatter;
+  const fm = asDuckDbFrontmatter(
+    host.app.metadataCache.getFileCache(file)?.frontmatter,
+  );
   const current = fm?.["duckdb-motherduck-refresh"];
   select.value = current === "daily" || current === "weekly" ? current : "";
 
-  select.addEventListener("change", async () => {
-    const v = select.value as "" | "daily" | "weekly";
-    try {
-      await host.app.fileManager.processFrontMatter(file, (fmEdit) => {
-        if (v === "") {
-          delete fmEdit["duckdb-motherduck-refresh"];
-        } else {
-          fmEdit["duckdb-motherduck-refresh"] = v;
-        }
-      });
-    } catch (e) {
-      console.error("[motherduck] failed to update refresh cadence frontmatter", e);
-      new Notice("failed to update refresh cadence");
-    }
+  select.addEventListener("change", () => {
+    void (async () => {
+      const v = select.value as "" | "daily" | "weekly";
+      try {
+        await host.app.fileManager.processFrontMatter(file, (fmEdit: DuckDbFrontmatter) => {
+          if (v === "") {
+            delete fmEdit["duckdb-motherduck-refresh"];
+          } else {
+            fmEdit["duckdb-motherduck-refresh"] = v;
+          }
+        });
+      } catch (e) {
+        console.error("[motherduck] failed to update refresh cadence frontmatter", e);
+        new Notice("failed to update refresh cadence");
+      }
+    })();
   });
 }
