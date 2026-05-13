@@ -7,7 +7,7 @@ function createSvgIcon(
   paths: IconPath[],
   opts: { extraAttrs?: Record<string, string> } = {},
 ): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, "svg");
+  const svg = activeDocument.createElementNS(SVG_NS, "svg");
   svg.setAttribute("xmlns", SVG_NS);
   svg.setAttribute("viewBox", viewBox);
   svg.setAttribute("width", "28");
@@ -18,7 +18,7 @@ function createSvgIcon(
     }
   }
   for (const { fill, d } of paths) {
-    const path = document.createElementNS(SVG_NS, "path");
+    const path = activeDocument.createElementNS(SVG_NS, "path");
     path.setAttribute("fill", fill);
     path.setAttribute("d", d);
     svg.appendChild(path);

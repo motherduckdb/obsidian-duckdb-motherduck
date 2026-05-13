@@ -17,8 +17,10 @@ import {
   LOG_CAP,
   STARTUP_DELAY_MS,
   SWEEP_INTERVAL_MS,
+  asDuckDbFrontmatter,
   type Cadence,
   type Connection,
+  type DuckDbFrontmatter,
   type QueryRunResult,
   type RefreshLogEntry,
   type Settings,
@@ -141,13 +143,19 @@ export default class MotherDuckPlugin extends Plugin {
     }
   }
 
+  // Obsidian's .d.ts types onload/onunload as `void`, but the framework
+  // actually awaits the returned Promise — the official sample plugin uses
+  // `async` here too. Wrapping with `void asyncFn()` would fire-and-forget
+  // and lose the "settings loaded before plugin reports ready" guarantee.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
   async onunload() {
     this.stopScheduler();
     await this.resetRuntimes();
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULTS, await this.loadData());
+    const stored = (await this.loadData()) as Partial<Settings> | null;
+    this.settings = Object.assign({}, DEFAULTS, stored ?? {});
   }
 
   async saveSettings() {
@@ -227,7 +235,7 @@ export default class MotherDuckPlugin extends Plugin {
         !("duckdb-motherduck-refresh" in fm) &&
         !("duckdb-motherduck-refresh-last" in fm)
       ) continue;
-      await this.app.fileManager.processFrontMatter(file, (fmEdit) => {
+      await this.app.fileManager.processFrontMatter(file, (fmEdit: DuckDbFrontmatter) => {
         delete fmEdit["duckdb-motherduck-refresh"];
         delete fmEdit["duckdb-motherduck-refresh-last"];
       });
@@ -406,7 +414,7 @@ export default class MotherDuckPlugin extends Plugin {
           const shouldStamp =
             opts.stampLastOnSuccess || (opts.stampPredicate?.(file) ?? false);
           if (shouldStamp) {
-            await this.app.fileManager.processFrontMatter(file, (fm) => {
+            await this.app.fileManager.processFrontMatter(file, (fm: DuckDbFrontmatter) => {
               fm["duckdb-motherduck-refresh-last"] = new Date().toISOString();
             });
           }
@@ -454,7 +462,9 @@ export default class MotherDuckPlugin extends Plugin {
   }> {
     const out: Array<{ file: TFile; cadence: Cadence; lastRefresh: string | null }> = [];
     for (const file of this.app.vault.getMarkdownFiles()) {
-      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const fm = asDuckDbFrontmatter(
+        this.app.metadataCache.getFileCache(file)?.frontmatter,
+      );
       if (!fm) continue;
       const raw = fm["duckdb-motherduck-refresh"];
       if (raw !== "daily" && raw !== "weekly") continue;
@@ -489,7 +499,7 @@ export default class MotherDuckPlugin extends Plugin {
     }
 
     try {
-      await this.app.fileManager.processFrontMatter(file, (fmEdit) => {
+      await this.app.fileManager.processFrontMatter(file, (fmEdit: DuckDbFrontmatter) => {
         delete fmEdit["duckdb-motherduck-refresh"];
         delete fmEdit["duckdb-motherduck-refresh-last"];
       });
