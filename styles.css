@@ -177,6 +177,61 @@
   display: none;
 }
 
+.motherduck-muted--with-margin {
+  margin-top: 4px;
+}
+
+.motherduck-settings-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 24px;
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.motherduck-settings-section--no-tagline {
+  margin-bottom: 8px;
+}
+
+.motherduck-settings-section__icon {
+  display: flex;
+  align-items: center;
+}
+
+.motherduck-settings-section__title {
+  margin: 0;
+}
+
+.motherduck-settings-section__tagline {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.motherduck-activity-log {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 0.85em;
+  font-family: var(--font-monospace);
+  line-height: 1.5;
+}
+
+.motherduck-activity-log__muted {
+  opacity: 0.7;
+}
+
+.motherduck-activity-log__link {
+  cursor: pointer;
+}
+
+.motherduck-activity-log__err {
+  color: var(--text-error);
+}
+
 @media (max-width: 520px) {
   .motherduck-block__badge {
     align-items: flex-start;

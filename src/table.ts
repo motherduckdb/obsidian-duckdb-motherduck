@@ -102,22 +102,22 @@ export function renderDomTable(
   }
 
   if (rows.length === 0) {
-    const empty = parent.createEl("div", { cls: "motherduck-muted", text: "0 rows" });
-    empty.style.marginTop = "4px";
+    parent.createEl("div", {
+      cls: "motherduck-muted motherduck-muted--with-margin",
+      text: "0 rows",
+    });
   }
 
   if (truncated) {
-    const more = parent.createEl("div", {
-      cls: "motherduck-muted",
+    parent.createEl("div", {
+      cls: "motherduck-muted motherduck-muted--with-margin",
       text: `… more rows hidden (cap ${cap}; query stopped early)`,
     });
-    more.style.marginTop = "4px";
   } else if (rows.length > cap) {
-    const more = parent.createEl("div", {
-      cls: "motherduck-muted",
+    parent.createEl("div", {
+      cls: "motherduck-muted motherduck-muted--with-margin",
       text: `… ${rows.length - cap} more rows hidden (cap ${cap})`,
     });
-    more.style.marginTop = "4px";
   }
 }
 

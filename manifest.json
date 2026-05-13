@@ -4,7 +4,7 @@
   "version": "0.1.1",
   "minAppVersion": "1.5.0",
   "description": "Run DuckDB SQL inside notes. Freeze query results inline as markdown tables. Optional MotherDuck token for cloud queries.",
-  "author": "Mehdi Ouazza",
+  "author": "MotherDuck",
   "authorUrl": "https://motherduck.com",
   "isDesktopOnly": false
 }
