@@ -1,7 +1,7 @@
 {
   "id": "duckdb-motherduck",
   "name": "DuckDB & MotherDuck",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "minAppVersion": "1.5.0",
   "description": "Run DuckDB SQL inside notes. Freeze query results inline as markdown tables. Optional MotherDuck token for cloud queries.",
   "author": "MotherDuck",
