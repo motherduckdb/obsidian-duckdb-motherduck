@@ -176,7 +176,9 @@ export class SettingsTab extends PluginSettingTab {
 
     new Setting(this.containerEl)
       .setName("Auto-refresh scheduled notes")
-      .setDesc("When on, opted-in notes refresh automatically based on their cadence.")
+      .setDesc(
+        "When on, opted-in notes re-run their queries on their cadence (hourly sweep while Obsidian is open). `motherduck` blocks make network calls to your MotherDuck workspace during these refreshes; `duckdb` blocks stay local.",
+      )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.scheduleEnabled).onChange(async (v) => {
           this.plugin.settings.scheduleEnabled = v;
