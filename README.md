@@ -86,6 +86,10 @@ Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** sett
 
 ## Install
 
+One click: **[Add to Obsidian](obsidian://show-plugin?id=duckdb-motherduck)** — opens the plugin page directly in Obsidian. Then hit *Install* and *Enable*.
+
+Or manually:
+
 1. In Obsidian, open **Settings → Community plugins → Browse**.
 2. Search for **DuckDB & MotherDuck** and click **Install**, then **Enable**.
 
