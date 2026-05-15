@@ -25,6 +25,8 @@ ORDER BY revenue DESC
 ```
 ````
 
+> For more demo items, check the [demo markdown page](https://github.com/motherduckdb/obsidian-duckdb-motherduck/blob/main/docs/demo.md).
+
 In reading mode the block becomes a SQL panel with **Run** / **Freeze** / **Clear freeze** buttons. Hit *Freeze* and the result drops in as a markdown table right under the SQL, bracketed by sentinel comments so the next refresh knows what to replace.
 
 ![Rendered DuckDB block with frozen result](docs/images/demo_obsidian_duckdb.png)
@@ -32,8 +34,6 @@ In reading mode the block becomes a SQL panel with **Run** / **Freeze** / **Clea
 Add a [MotherDuck token](#install) in Settings to enable `motherduck` blocks against cloud databases or heavier compute:
 
 ![Rendered MotherDuck block with frozen result](docs/images/demo_obsidian_motherduck.png)
-
-For a fuller tour (two local DuckDB blocks, three MotherDuck blocks, a hybrid template), drop [`docs/demo.md`](docs/demo.md) into your vault and run **Refresh all queries in this note** from the command palette.
 
 ## Why this and not Dataview?
 
