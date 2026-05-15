@@ -4,6 +4,23 @@ Bring **external data** into your Obsidian notes via DuckDB SQL, then freeze the
 
 Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query your cloud data alongside, picking per code block which connection to use.
 
+- **Query any local or remote file**: Parquet, CSV, JSON, Excel, Iceberg, Delta, geospatial. Anything DuckDB reads.
+- **Cache results inline as markdown**: freeze the query output right under the SQL so the note becomes a self-contained document, readable in any editor.
+- **Scheduled refresh**: pick a daily or weekly cadence per note; the plugin re-runs the queries automatically while Obsidian is open.
+- **MotherDuck for cloud data and compute**: add a token to query cloud databases or push heavy SQL onto MotherDuck instead of your laptop.
+
+## Quick start
+
+[`docs/demo.md`](docs/demo.md) is a six-block tour you can drop into your vault: two local DuckDB blocks (Parquet over HTTPS, CSV from GitHub), three MotherDuck blocks (Hacker News from `sample_data`, plus a public HTTPS parquet that proves the cloud path works without AWS creds), and a hybrid local-CSV + MotherDuck template. Open it, run **Refresh all queries in this note** from the command palette, and the file fills in with frozen result tables.
+
+A rendered local block, with the inline frozen result below it:
+
+![Rendered DuckDB block with frozen result](docs/images/demo_obsidian_duckdb.png)
+
+A rendered MotherDuck block, hitting cloud compute:
+
+![Rendered MotherDuck block with frozen result](docs/images/demo_obsidian_motherduck.png)
+
 ## Why this and not Dataview?
 
 Dataview is the go-to plugin for querying *the vault itself* — your frontmatter, tags, and links across notes. This plugin solves the opposite problem: pulling **external data** (CSV, Parquet, JSON, Excel, Iceberg, Delta, geospatial files, plus your MotherDuck cloud) into a note via DuckDB SQL, and joining across them when you want.
@@ -57,14 +74,6 @@ Each block picks its backend via the fence type. Both connections can be configu
 | ` ```duckdb `    | `@duckdb/duckdb-wasm`     | no          | no            |
 | ` ```motherduck `| `@motherduck/wasm-client` | yes         | yes           |
 
-A rendered local block:
-
-![Rendered DuckDB block](docs/images/duckdb_cell.png)
-
-A rendered cloud block:
-
-![Rendered MotherDuck block](docs/images/motherduck_cell.png)
-
 Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** setting:
 
 - `:memory:` (default), ephemeral in-memory database. Reset on every Obsidian restart.
@@ -73,17 +82,12 @@ Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** sett
 
 ## Install
 
-The plugin isn't in the Obsidian community store yet — the review queue is deep, so until it lands the easiest path is BRAT.
+1. In Obsidian, open **Settings → Community plugins → Browse**.
+2. Search for **DuckDB & MotherDuck** and click **Install**, then **Enable**.
 
-### Recommended: via BRAT
+That's it for the standard path. Obsidian's update channel handles new releases automatically.
 
-1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Settings → Community plugins.
-2. Open BRAT's settings → **Add beta plugin** → paste the repository: `motherduckdb/obsidian-duckdb-motherduck`.
-3. BRAT will pull the latest tagged release and install it. Enable *DuckDB & MotherDuck* in Settings → Community plugins.
-
-BRAT also keeps the plugin updated when new releases ship.
-
-### Manual
+### Manual (from source)
 
 1. Clone this repo.
 2. `npm install && npm run build`, produces `main.js`.
