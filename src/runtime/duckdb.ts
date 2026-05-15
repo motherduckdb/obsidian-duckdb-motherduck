@@ -161,7 +161,11 @@ export class DuckDBWasmRuntime implements Runtime {
     // result in WASM heap or in JS.
     const limit = rowCap + 1;
     const stream = await this.conn!.send(sql);
-    const columns = stream.schema.fields.map((f) => f.name);
+    // For IO-bound queries (read_parquet over HTTP), the stream's schema is
+    // not populated until the reader has been opened. Calling .open() here
+    // also returns the same reader with its schema attached.
+    const opened = await stream.open();
+    const columns = (stream.schema ?? opened.schema).fields.map((f) => f.name);
     const rows: Row[] = [];
 
     try {
