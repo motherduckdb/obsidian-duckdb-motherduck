@@ -4,6 +4,37 @@ Bring **external data** into your Obsidian notes via DuckDB SQL, then freeze the
 
 Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query your cloud data alongside, picking per code block which connection to use.
 
+- **Query any local or remote file**: Parquet, CSV, JSON, Excel, Iceberg, Delta, geospatial. Anything DuckDB reads.
+- **Cache results inline as markdown**: freeze the query output right under the SQL so the note becomes a self-contained document, readable in any editor.
+- **Scheduled refresh**: pick a daily or weekly cadence per note; the plugin re-runs the queries automatically while Obsidian is open.
+- **MotherDuck for cloud data and compute**: add a token to query cloud databases or push heavy SQL onto MotherDuck instead of your laptop.
+
+## Quick start
+
+Install via *Community plugins* (see [Install](#install)), then paste this block into any note:
+
+````markdown
+```duckdb
+SELECT
+  o_orderpriority AS priority,
+  count(*) AS orders,
+  round(sum(o_totalprice), 2) AS revenue
+FROM read_parquet('https://shell.duckdb.org/data/tpch/0_01/parquet/orders.parquet')
+GROUP BY 1
+ORDER BY revenue DESC
+```
+````
+
+In reading mode the block becomes a SQL panel with **Run** / **Freeze** / **Clear freeze** buttons. Hit *Freeze* and the result drops in as a markdown table right under the SQL, bracketed by sentinel comments so the next refresh knows what to replace.
+
+![Rendered DuckDB block with frozen result](docs/images/demo_obsidian_duckdb.png)
+
+Add a [MotherDuck token](#install) in Settings to enable `motherduck` blocks against cloud databases or heavier compute:
+
+![Rendered MotherDuck block with frozen result](docs/images/demo_obsidian_motherduck.png)
+
+For a fuller tour (two local DuckDB blocks, three MotherDuck blocks, a hybrid template), drop [`docs/demo.md`](docs/demo.md) into your vault and run **Refresh all queries in this note** from the command palette.
+
 ## Why this and not Dataview?
 
 Dataview is the go-to plugin for querying *the vault itself* — your frontmatter, tags, and links across notes. This plugin solves the opposite problem: pulling **external data** (CSV, Parquet, JSON, Excel, Iceberg, Delta, geospatial files, plus your MotherDuck cloud) into a note via DuckDB SQL, and joining across them when you want.
@@ -19,14 +50,6 @@ Output is regular markdown wrapped in sentinel comments — so it diffs cleanly 
 - Quick exploration of a CSV/Parquet/Excel file in your data folder without leaving Obsidian.
 - Snapshotting a MotherDuck query into a weekly report note (with [scheduled refresh](#scheduled-refresh)).
 - Joining a local file (e.g. expenses CSV) with cloud tables in MotherDuck.
-
-## What it does
-
-- **`duckdb` / `motherduck` code blocks**: render a SQL panel in reading mode with a ▶ Run button and a connection badge showing which engine the block runs against.
-- **Freeze**: "Freeze query at cursor" or the 📌 button in reading mode runs the query and writes the result as a markdown table directly below the block, bracketed by sentinel comments.
-- **Refresh**: "Refresh all queries in this note" re-runs every SQL block and replaces its frozen output.
-- **Scheduled refresh**: pick a daily / weekly cadence per note via the per-block dropdown; the plugin sweeps once an hour while Obsidian runs and refreshes overdue notes automatically. Activity log + manual "Refresh now" button in plugin settings.
-- **Plugin API**: `app.plugins.getPlugin('duckdb-motherduck').api.refreshFile(path)` and `.runQuery(sql, connection?)` (where `connection` is `"local"` or `"cloud"`, defaulting to `"local"`), so Claude Code or other agents can trigger refreshes via `obsidian eval`.
 
 ## Freeze format
 
@@ -44,9 +67,7 @@ SELECT brand, SUM(revenue) FROM sales GROUP BY 1 ORDER BY 2 DESC LIMIT 10
 <!-- md:cache-end -->
 ````
 
-The sentinel carries a query hash, connection, timestamp, and row count. Refresh/freeze replaces the sentinel block below the query.
-
-The frozen output is regular markdown — open the same note in Neovim, VS Code, or `cat`, and you see the table inline with the query. No custom rendering required, and any agent skimming the vault sees both the question and its answer as one document.
+The sentinel carries a query hash, connection, timestamp, and row count. Refresh and freeze replace the sentinel block below the query in place.
 
 ## Connections
 
@@ -57,14 +78,6 @@ Each block picks its backend via the fence type. Both connections can be configu
 | ` ```duckdb `    | `@duckdb/duckdb-wasm`     | no          | no            |
 | ` ```motherduck `| `@motherduck/wasm-client` | yes         | yes           |
 
-A rendered local block:
-
-![Rendered DuckDB block](docs/images/duckdb_cell.png)
-
-A rendered cloud block:
-
-![Rendered MotherDuck block](docs/images/motherduck_cell.png)
-
 Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** setting:
 
 - `:memory:` (default), ephemeral in-memory database. Reset on every Obsidian restart.
@@ -73,60 +86,27 @@ Local DuckDB has three sub-modes, set via the **Path to local DuckDB file** sett
 
 ## Install
 
-The plugin isn't in the Obsidian community store yet — the review queue is deep, so until it lands the easiest path is BRAT.
+1. In Obsidian, open **Settings → Community plugins → Browse**.
+2. Search for **DuckDB & MotherDuck** and click **Install**, then **Enable**.
 
-### Recommended: via BRAT
+That's it for the standard path. Obsidian's update channel handles new releases automatically.
 
-1. Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) from Settings → Community plugins.
-2. Open BRAT's settings → **Add beta plugin** → paste the repository: `motherduckdb/obsidian-duckdb-motherduck`.
-3. BRAT will pull the latest tagged release and install it. Enable *DuckDB & MotherDuck* in Settings → Community plugins.
-
-BRAT also keeps the plugin updated when new releases ship.
-
-### Manual
+### Manual (from source)
 
 1. Clone this repo.
 2. `npm install && npm run build`, produces `main.js`.
 3. Copy `main.js`, `manifest.json`, and `styles.css` into `<your-vault>/.obsidian/plugins/duckdb-motherduck/`.
 4. In Obsidian: Settings → Community plugins → enable *DuckDB & MotherDuck*.
 
-## Usage
-
-Create code blocks tagged with the connection you want:
-
-````markdown
-```duckdb
--- runs against your local DuckDB
-SELECT 42 AS answer, now() AS ts
-```
-
-```duckdb
--- read a Parquet/CSV/JSON file from disk
-SELECT category, SUM(amount) AS total
-FROM read_csv('/Users/you/data/expenses.csv')
-GROUP BY 1
-ORDER BY total DESC
-LIMIT 5
-```
-
-```motherduck
--- query MotherDuck and join with a local CSV in the same SQL
-SELECT s.region, s.revenue, e.amount AS expense
-FROM sales s
-LEFT JOIN read_csv('/Users/you/data/expenses.csv') e USING (region)
-ORDER BY s.revenue DESC
-```
-````
-
-In reading mode each block shows its connection badge (`DuckDB :memory:` or `MotherDuck`), a `Refresh: none / daily / weekly` dropdown for scheduled refresh (see below), and the ▶ Run / 📌 Freeze buttons.
+## Commands
 
 From the command palette:
 
-- **Refresh all queries in this note**, re-runs every block in the current note.
-- **Refresh query at cursor**, re-runs and re-freezes only the block the cursor is on. Bind a hotkey under Settings → Hotkeys for fast vim-mode iteration.
-- **Freeze query at cursor**, alias of "Refresh query at cursor" — kept for users who think of it as the first-time freeze action.
-- **Clear freeze at cursor**, removes the frozen result below the SQL block at the cursor (matching the **Clear freeze** button shown in the rendered panel when a frozen result is present).
-- **Reset DuckDB/MotherDuck connections**, drops both connections; useful after changing the path or token.
+- **Refresh all queries in this note**: re-runs every block in the current note.
+- **Refresh query at cursor**: re-runs and re-freezes only the block the cursor is on. Bind a hotkey under Settings → Hotkeys for fast iteration.
+- **Freeze query at cursor**: alias of *Refresh query at cursor*, kept for users who think of it as the first-time freeze action.
+- **Clear freeze at cursor**: removes the frozen result below the SQL block at the cursor (matches the **Clear freeze** button in the rendered panel).
+- **Reset DuckDB / MotherDuck connections**: drops both connections; useful after changing the path or token.
 
 ## Settings
 
@@ -161,15 +141,20 @@ The settings page also has:
 - An **Unschedule all** button: strips `duckdb-motherduck-refresh` (and the plugin-managed `-last` timestamp) from every note's frontmatter. Use to bulk-disable auto-refresh after experimenting, or to free up the hourly sweep before running heavy queries.
 - An **Activity log** showing the last 100 refresh attempts (timestamp, trigger, path, blocks refreshed, first error message if any). Click a path to open the note. **Clear log** wipes history.
 
-## Agent trigger
+## Plugin API
 
-Both the human button and the agent flow share the same code path. From a shell with the [official Obsidian CLI](https://obsidian.md/help/cli) installed:
+The same code path the *Refresh* button uses is exposed for agents and external triggers:
+
+- `app.plugins.getPlugin('duckdb-motherduck').api.refreshFile(path)`: re-runs every block in the note, returns the refresh count.
+- `app.plugins.getPlugin('duckdb-motherduck').api.runQuery(sql, connection?)`: runs ad-hoc SQL. `connection` is `"local"` or `"cloud"`, defaults to `"local"`.
+
+Wired into a shell via the [official Obsidian CLI](https://obsidian.md/help/cli):
 
 ```sh
 obsidian eval code="app.plugins.getPlugin('duckdb-motherduck').api.refreshFile('path/to/note.md')"
 ```
 
-...or wire it into a Claude Code skill. The plugin reports the number of blocks refreshed.
+Drop that into a cron, a Claude Code skill, or any agent that has shell access.
 
 ## Build from source
 
