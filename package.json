@@ -1,6 +1,6 @@
 {
   "name": "duckdb-motherduck-obsidian-plugin",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Obsidian plugin for DuckDB and MotherDuck. Query SQL inside notes, freeze results inline.",
   "main": "main.js",
   "scripts": {
