@@ -4,7 +4,10 @@ import { Row, QueryResult, Runtime, normalizeValue } from "./index";
 export class MotherDuckRuntime implements Runtime {
   private connection: MDConnection | null = null;
 
-  constructor(private token: string) {}
+  constructor(
+    private token: string,
+    private customUserAgent?: string,
+  ) {}
 
   label() {
     return "MotherDuck (cloud)";
@@ -16,6 +19,7 @@ export class MotherDuckRuntime implements Runtime {
     this.connection = MDConnection.create({
       mdToken: this.token,
       useDuckDBWasmCOI: false,
+      customUserAgent: this.customUserAgent,
     });
     await this.connection.isInitialized();
   }
