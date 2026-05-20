@@ -29,7 +29,10 @@ import {
 
 export default class MotherDuckPlugin extends Plugin {
   settings!: Settings;
-  private runtimeManager = new RuntimeManager(() => this.settings);
+  private runtimeManager = new RuntimeManager(
+    () => this.settings,
+    `obsidian-duckdb-motherduck/${this.manifest.version}(obsidian)`,
+  );
   private fileLocks = new FileLock();
   private sweepTimeout: number | null = null;
   private sweepInterval: number | null = null;

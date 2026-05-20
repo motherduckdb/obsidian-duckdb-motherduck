@@ -17,7 +17,10 @@ export class RuntimeManager {
     cloud: Promise.resolve(),
   };
 
-  constructor(private getSettings: () => Settings) {}
+  constructor(
+    private getSettings: () => Settings,
+    private customUserAgent?: string,
+  ) {}
 
   async reset(only?: Connection) {
     if (!only || only === "local") {
@@ -65,7 +68,7 @@ export class RuntimeManager {
       }
       if (this.cloudRuntime) return this.cloudRuntime;
       if (!this.cloudRuntimePromise) {
-        const rt = new MotherDuckRuntime(settings.mdToken);
+        const rt = new MotherDuckRuntime(settings.mdToken, this.customUserAgent);
         const generation = this.generation.cloud;
         this.cloudRuntimePromise = this.initRuntime(rt, "cloud", generation);
       }
