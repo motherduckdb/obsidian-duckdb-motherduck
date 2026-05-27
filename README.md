@@ -91,7 +91,7 @@ One click: **[Add to Obsidian](obsidian://show-plugin?id=duckdb-motherduck)** �
 Or manually:
 
 1. In Obsidian, open **Settings → Community plugins → Browse**.
-2. Search for **DuckDB & MotherDuck** and click **Install**, then **Enable**.
+2. Search for **DuckDB and MotherDuck** and click **Install**, then **Enable**.
 
 That's it for the standard path. Obsidian's update channel handles new releases automatically.
 
@@ -100,7 +100,7 @@ That's it for the standard path. Obsidian's update channel handles new releases 
 1. Clone this repo.
 2. `npm install && npm run build`, produces `main.js`.
 3. Copy `main.js`, `manifest.json`, and `styles.css` into `<your-vault>/.obsidian/plugins/duckdb-motherduck/`.
-4. In Obsidian: Settings → Community plugins → enable *DuckDB & MotherDuck*.
+4. In Obsidian: Settings → Community plugins → enable *DuckDB and MotherDuck*.
 
 ## Commands
 
