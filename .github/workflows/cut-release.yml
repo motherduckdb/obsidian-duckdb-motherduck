@@ -1,0 +1,74 @@
+name: Cut release
+
+# Manual release entry point: Actions tab -> "Cut release" -> Run workflow.
+# Bumps the version on main (npm version runs version-bump.mjs, which mirrors
+# the new version into manifest.json and versions.json), pushes the commit and
+# tag as the actions bot, then calls release.yml to build and attach a draft
+# release. Nothing is published automatically: edit the draft's notes and
+# publish it by hand.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+# One release at a time; a second click queues instead of racing the push.
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate the bump on a green tree so a broken main never gets tagged.
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Bump version and tag
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm version "${{ inputs.bump }}"
+          echo "tag=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Push version commit and tag
+        run: git push origin main --follow-tags
+
+  release:
+    needs: bump
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.bump.outputs.tag }}

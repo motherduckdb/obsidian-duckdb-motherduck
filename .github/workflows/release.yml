@@ -1,9 +1,21 @@
 name: Release Obsidian plugin
 
+# Runs in two ways:
+#   1. A tag is pushed manually (legacy path).
+#   2. Called by cut-release.yml after it bumps the version and pushes the
+#      tag. The explicit workflow_call is required because tags pushed with
+#      the default GITHUB_TOKEN do not fire `on: push: tags` (GitHub's
+#      anti-recursion rule).
 on:
   push:
     tags:
       - "*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Existing tag to build and draft a release for (e.g. 0.1.9)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -16,6 +28,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # On tag pushes inputs.tag is empty and github.ref is the tag. When
+          # called from cut-release.yml the calling ref predates the version
+          # commit, so check out the freshly pushed tag instead.
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -46,8 +63,9 @@ jobs:
       - name: Create draft release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          tag="${INPUT_TAG:-${GITHUB_REF#refs/tags/}}"
           gh release create "$tag" \
             --title="$tag" \
             --draft \
