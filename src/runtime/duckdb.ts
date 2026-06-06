@@ -7,7 +7,7 @@ import {
 } from "@duckdb/duckdb-wasm";
 import workerEh from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js";
 import workerMvp from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js";
-import { Row, QueryResult, Runtime, normalizeValue } from "./index";
+import { Row, QueryResult, Runtime, normalizeValue, ArrowTypeLike } from "./index";
 
 // Electron's renderer exposes Node's `require` on the main renderer's
 // `window`. Used to read real disk files for read-only queries via
@@ -146,10 +146,17 @@ export class DuckDBWasmRuntime implements Runtime {
 
     if (rowCap === undefined) {
       const table = await this.conn!.query(sql);
-      const columns = table.schema.fields.map((f) => f.name);
+      const fields = table.schema.fields;
+      const columns = fields.map((f) => f.name);
+      // Pass each column's Arrow type so temporal values (DATE/TIMESTAMP/TIME
+      // arrive as raw epoch numbers from Arrow JS) get formatted, not echoed
+      // as Unix timestamps.
+      const types = fields.map((f) => f.type as unknown as ArrowTypeLike);
       const rows: Row[] = table.toArray().map((r: Record<string, unknown>) => {
         const obj: Row = {};
-        for (const c of columns) obj[c] = normalizeValue(r[c]);
+        columns.forEach((c, i) => {
+          obj[c] = normalizeValue(r[c], types[i]);
+        });
         return obj;
       });
       return { rows, columns, truncated: false };
@@ -165,7 +172,9 @@ export class DuckDBWasmRuntime implements Runtime {
     // not populated until the reader has been opened. Calling .open() here
     // also returns the same reader with its schema attached.
     const opened = await stream.open();
-    const columns = (stream.schema ?? opened.schema).fields.map((f) => f.name);
+    const fields = (stream.schema ?? opened.schema).fields;
+    const columns = fields.map((f) => f.name);
+    const types = fields.map((f) => f.type as unknown as ArrowTypeLike);
     const rows: Row[] = [];
 
     try {
@@ -176,7 +185,9 @@ export class DuckDBWasmRuntime implements Runtime {
         for (const r of batchRows) {
           if (rows.length >= limit) break;
           const obj: Row = {};
-          for (const c of columns) obj[c] = normalizeValue(r[c]);
+          columns.forEach((c, i) => {
+            obj[c] = normalizeValue(r[c], types[i]);
+          });
           rows.push(obj);
         }
       }
