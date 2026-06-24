@@ -170,3 +170,17 @@ ORDER BY revenue DESC
 | AIR | 8491 | 303207759.31 |
 
 <!-- md:cache-end -->
+
+
+## 6. Pure DuckDB, read a CSV from your vault
+
+This block reads a file that lives **inside the vault**, next to this note at [`data/cities.csv`](data/cities.csv). The plugin reads the file through Obsidian's vault API and hands the bytes to DuckDB-WASM, so the path is resolved relative to this note (vault root is also tried). Works offline, no token, and works on mobile too. Paths are resolved relative to the note first, then the vault root.
+
+```duckdb
+SELECT country, count(*) AS cities, sum(population) AS people
+FROM read_csv('data/cities.csv')
+GROUP BY 1
+ORDER BY people DESC
+```
+
+> The whole file is loaded into memory in the Obsidian process, so there's a size cap (**Settings → Max local file size**, default 1024 MB). For larger data, read it over a URL (httpfs) or push it to MotherDuck. Globs (`data/*.csv`) and absolute paths outside the vault aren't supported here — use a URL or the read-only DuckDB file path for those.

@@ -7,6 +7,11 @@ import {
   type FencedBlock,
 } from "./src/markdown";
 import { renderQueryBlock } from "./src/query-block";
+import {
+  candidateVaultPaths,
+  extractFileLiterals,
+  isVaultCandidate,
+} from "./src/local-files";
 import { RuntimeManager } from "./src/runtime/manager";
 import { consecutiveAllErrorFailures, isOverdue } from "./src/schedule";
 import { SettingsTab } from "./src/settings-tab";
@@ -14,6 +19,7 @@ import { renderMarkdownTable } from "./src/table";
 import {
   AUTO_DISABLE_FAILURE_THRESHOLD,
   DEFAULTS,
+  LOCAL_FILE_WARN_MB,
   LOG_CAP,
   STARTUP_DELAY_MS,
   SWEEP_INTERVAL_MS,
@@ -182,8 +188,65 @@ export default class MotherDuckPlugin extends Plugin {
     sql: string,
     connection: Connection,
     rowCap?: number,
+    sourcePath?: string,
   ): Promise<QueryRunResult> {
-    return this.runtimeManager.runQuery(sql, connection, rowCap);
+    // Only the local DuckDB engine reads vault files; cloud queries run on
+    // MotherDuck and can't see the laptop's files.
+    const files =
+      connection === "local"
+        ? await this.resolveLocalFiles(sql, sourcePath)
+        : undefined;
+    return this.runtimeManager.runQuery(sql, connection, rowCap, files);
+  }
+
+  // Find file literals in the SQL that point at existing vault files, gate each
+  // on size, and read its bytes so the runtime can register them. Anything that
+  // isn't a vault file (URLs, absolute disk paths, globs, or names that don't
+  // resolve) is skipped and left for DuckDB to handle or error on.
+  private async resolveLocalFiles(
+    sql: string,
+    sourcePath?: string,
+  ): Promise<Array<{ name: string; bytes: Uint8Array }>> {
+    const literals = extractFileLiterals(sql).filter(isVaultCandidate);
+    if (literals.length === 0) return [];
+
+    const adapter = this.app.vault.adapter;
+    const capBytes = this.settings.maxLocalFileMB * 1024 * 1024;
+    const out: Array<{ name: string; bytes: Uint8Array }> = [];
+
+    for (const literal of literals) {
+      let resolved: string | null = null;
+      for (const candidate of candidateVaultPaths(literal, sourcePath)) {
+        if (await adapter.exists(candidate)) {
+          resolved = candidate;
+          break;
+        }
+      }
+      if (!resolved) continue; // not a vault file — let DuckDB try (URL/error)
+
+      const stat = await adapter.stat(resolved);
+      const size = stat?.size ?? 0;
+      if (capBytes > 0 && size > capBytes) {
+        const mb = (size / (1024 * 1024)).toFixed(0);
+        throw new Error(
+          `Local file '${literal}' is ${mb} MB, over the ${this.settings.maxLocalFileMB} MB limit. ` +
+            `It would be loaded fully into memory. Raise "Max local file size" in settings, ` +
+            `or query it via a URL (httpfs) or MotherDuck instead.`,
+        );
+      }
+      if (size > LOCAL_FILE_WARN_MB * 1024 * 1024) {
+        new Notice(
+          `Loading ${(size / (1024 * 1024)).toFixed(0)} MB '${literal}' into memory…`,
+        );
+      }
+
+      const buf = await adapter.readBinary(resolved);
+      // Register under the exact literal the user wrote, so their SQL runs
+      // unchanged (DuckDB resolves registered names before the filesystem).
+      out.push({ name: literal, bytes: new Uint8Array(buf) });
+    }
+
+    return out;
   }
 
   startScheduler() {
@@ -271,7 +334,7 @@ export default class MotherDuckPlugin extends Plugin {
       const file = this.app.vault.getAbstractFileByPath(path);
       if (!(file instanceof TFile)) throw new Error(`not a file: ${path}`);
       const content = await this.app.vault.read(file);
-      const result = await this.processAllBlocks(content);
+      const result = await this.processAllBlocks(content, file.path);
       await this.modifyIfUnchanged(file, content, result.newContent);
       return { refreshed: result.refreshed, errored: result.errored, firstError: result.firstError };
     });
@@ -283,7 +346,7 @@ export default class MotherDuckPlugin extends Plugin {
       const blocks = findBlocks(content);
       const hit = blocks.find((b) => cursorLine >= b.startLine && cursorLine <= b.endLine);
       if (!hit) throw new Error("no ```duckdb or ```motherduck block at cursor");
-      const newContent = await this.freezeBlock(content, hit);
+      const newContent = await this.freezeBlock(content, hit, file.path);
       await this.modifyIfUnchanged(file, content, newContent);
       return "Refreshed 1 block";
     });
@@ -340,13 +403,14 @@ export default class MotherDuckPlugin extends Plugin {
         findBlocks(content).find(
           (candidate) => candidate.startLine === info.lineStart && candidate.endLine === info.lineEnd,
         ) ?? { sql, startLine: info.lineStart, endLine: info.lineEnd, connection };
-      const newContent = await this.freezeBlock(content, block);
+      const newContent = await this.freezeBlock(content, block, file.path);
       await this.modifyIfUnchanged(file, content, newContent);
     });
   }
 
   async processAllBlocks(
     content: string,
+    sourcePath?: string,
   ): Promise<{ newContent: string; refreshed: number; errored: number; firstError?: string }> {
     const blocks = findBlocks(content);
     let working = content;
@@ -356,7 +420,7 @@ export default class MotherDuckPlugin extends Plugin {
 
     for (let i = blocks.length - 1; i >= 0; i--) {
       try {
-        working = await this.freezeBlock(working, blocks[i]);
+        working = await this.freezeBlock(working, blocks[i], sourcePath);
         refreshed++;
       } catch (e) {
         console.error("[motherduck] block error", e);
@@ -368,11 +432,12 @@ export default class MotherDuckPlugin extends Plugin {
     return { newContent: working, refreshed, errored, firstError };
   }
 
-  async freezeBlock(content: string, block: FencedBlock): Promise<string> {
+  async freezeBlock(content: string, block: FencedBlock, sourcePath?: string): Promise<string> {
     const { rows, columns, truncated } = await this.runQuery(
       block.sql,
       block.connection,
       this.settings.rowCap,
+      sourcePath,
     );
     const mdTable = renderMarkdownTable(
       rows,

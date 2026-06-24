@@ -12,6 +12,12 @@ export const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 export const STARTUP_DELAY_MS = 5 * 1000;
 export const LOG_CAP = 100;
 
+// Local vault files are read fully into memory and handed to DuckDB-Wasm in the
+// renderer process. Above this size we warn (the load is noticeable); above the
+// configurable `maxLocalFileMB` cap we refuse, because OOMing the renderer can
+// take down the Obsidian window and lose unsaved edits.
+export const LOCAL_FILE_WARN_MB = 100;
+
 export interface RefreshLogEntry {
   ts: string;
   path: string;
@@ -29,6 +35,9 @@ export interface Settings {
   scheduleEnabled: boolean;
   resetAfterSchedule: boolean;
   refreshLog: RefreshLogEntry[];
+  // Max size (MB) of a vault file the plugin will read into memory for a
+  // `duckdb` query. 0 = no limit (power users who accept the OOM risk).
+  maxLocalFileMB: number;
 }
 
 export interface QueryRunResult {
@@ -51,6 +60,7 @@ export const DEFAULTS: Settings = {
   scheduleEnabled: false,
   resetAfterSchedule: true,
   refreshLog: [],
+  maxLocalFileMB: 1024,
 };
 
 export const AUTO_DISABLE_FAILURE_THRESHOLD = 3;

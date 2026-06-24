@@ -4,7 +4,7 @@ Bring **external data** into your Obsidian notes via DuckDB SQL, then freeze the
 
 Works entirely offline with local DuckDB WASM. Add a MotherDuck token to query your cloud data alongside, picking per code block which connection to use.
 
-- **Query any local or remote file**: Parquet, CSV, JSON, Excel, Iceberg, Delta, geospatial. Anything DuckDB reads.
+- **Query files in your vault or over the web**: read a CSV/Parquet/JSON sitting next to your note (`read_csv('data/sales.csv')`) or any remote URL. Plus Excel, Iceberg, Delta, geospatial — anything DuckDB reads.
 - **Cache results inline as markdown**: freeze the query output right under the SQL so the note becomes a self-contained document, readable in any editor.
 - **Scheduled refresh**: pick a daily or weekly cadence per note; the plugin re-runs the queries automatically while Obsidian is open.
 - **MotherDuck for cloud data and compute**: add a token to query cloud databases or push heavy SQL onto MotherDuck instead of your laptop.
@@ -34,6 +34,24 @@ In reading mode the block becomes a SQL panel with **Run** / **Freeze** / **Clea
 Add a [MotherDuck token](#install) in Settings to enable `motherduck` blocks against cloud databases or heavier compute:
 
 ![Rendered MotherDuck block with frozen result](docs/images/demo_obsidian_motherduck.png)
+
+## Reading files from your vault
+
+A `duckdb` block can read data files stored **in your vault** — drop a CSV/Parquet/JSON next to your note and query it by name:
+
+````markdown
+```duckdb
+SELECT country, count(*) AS cities FROM read_csv('data/cities.csv') GROUP BY 1
+```
+````
+
+The plugin reads the file through Obsidian's vault API (so it also works on mobile, unlike the absolute-path DuckDB-file setting) and hands the bytes to the local engine before the query runs. Paths resolve **relative to the note first**, then the vault root. Supported across `read_csv`, `read_parquet`, `read_json`, `read_ndjson` (and their `_auto` variants), plus bare `FROM 'file.parquet'`.
+
+Limits worth knowing:
+
+- **The whole file is loaded into memory** in the Obsidian process. There's a size cap — *Settings → Max local file size* (default 1024 MB); above it the query is refused, because exhausting memory can crash the window. For larger data, read it over a **URL** (`https://…`, range-read by httpfs, nothing held whole) or push it to **MotherDuck**.
+- **Globs** (`data/*.csv`) and **absolute paths outside the vault** aren't handled by the vault bridge. Use a URL for those, or the read-only [DuckDB file path](#connections) setting for an on-disk `.duckdb` database.
+- Cloud (`motherduck`) blocks don't read vault files — that would mean uploading. Keep local files on `duckdb`.
 
 ## Why this and not Dataview?
 
@@ -121,6 +139,7 @@ From the command palette:
 - **Scheduled refresh**: see the next section.
 - **General → Row cap**: max rows rendered inline or written into a frozen table. The runtime stops scanning at `rowCap + 1` rows and discards the rest, so heavy queries (`FROM 'huge.csv'`) don't materialize 40k rows in WASM heap just to throw 39 900 of them away. A truncation notice is appended if more rows existed.
 - **General → Cell character cap**: max characters per cell in rendered and frozen tables; longer values are truncated with an ellipsis. Hover a truncated cell in the live result to see the full value. Default `80`.
+- **DuckDB → Max local file size (MB)**: cap on a vault file a `duckdb` query will load into memory (default `1024`). Above it the query is refused — see [Reading files from your vault](#reading-files-from-your-vault). Set `0` to disable the limit (you accept the out-of-memory risk).
 
 ## Scheduled refresh
 
@@ -200,7 +219,8 @@ Queries run locally (`duckdb` blocks) or against your MotherDuck account (`mothe
 
 ## Known limitations
 
-- **No mobile validation**, the architecture should work in mobile Obsidian for `:memory:` and OPFS modes, but hasn't been tested on iOS/Android. Absolute-path mode requires Node integration which isn't available on mobile.
+- **No mobile validation**, the architecture should work in mobile Obsidian for `:memory:` and OPFS modes (vault-file reads use the cross-platform vault API and should work on mobile too), but hasn't been tested on iOS/Android. Absolute-path mode requires Node integration which isn't available on mobile.
+- **Vault-file reads are size-capped and in-memory**: the file is loaded whole into the renderer, so large files are refused above *Max local file size*. Globs and absolute paths outside the vault aren't supported through the vault bridge — use a URL or MotherDuck. See [Reading files from your vault](#reading-files-from-your-vault).
 - **Read-only for on-disk files**, pointing at a real `.duckdb` file lets you query it, but writes (`CREATE` / `INSERT` / `UPDATE`) succeed only inside the worker and don't persist back to the file.
 - **Scheduled refresh runs only while Obsidian is open.** If you want notes refreshed while your laptop is asleep or Obsidian is closed, you need an external trigger (e.g. cron + the Obsidian CLI calling the plugin's API).
 - **No keychain integration for the MotherDuck token**, stored plaintext in `data.json`. See *Security*.

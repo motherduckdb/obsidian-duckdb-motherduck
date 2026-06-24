@@ -52,9 +52,15 @@ export class RuntimeManager {
     sql: string,
     connection: Connection,
     rowCap?: number,
+    files?: ReadonlyArray<{ name: string; bytes: Uint8Array }>,
   ): Promise<QueryRunResult> {
     return this.enqueueQuery(connection, async () => {
       const rt = await this.getRuntime(connection);
+      // Register inside the same queue slot as the query so a concurrent query
+      // on this connection can't run between registration and use.
+      if (files) {
+        for (const f of files) await rt.registerFile(f.name, f.bytes);
+      }
       return rt.runQuery(sql, rowCap);
     });
   }

@@ -21,6 +21,13 @@ export interface Runtime {
    * materialized (legacy behavior, used for the public plugin API).
    */
   runQuery(sql: string, rowCap?: number): Promise<QueryResult>;
+  /**
+   * Make a file's bytes queryable under `name`, so SQL like
+   * `read_csv('<name>')` reads from these bytes instead of the host
+   * filesystem (which WASM can't reach). The bytes stay resident until the
+   * runtime is closed; re-registering the same name replaces them.
+   */
+  registerFile(name: string, bytes: Uint8Array): Promise<void>;
   close(): Promise<void>;
   label(): string;
 }

@@ -63,6 +63,32 @@ export class SettingsTab extends PluginSettingTab {
           }),
       );
 
+    new Setting(this.containerEl)
+      .setName("Max local file size (MB)")
+      .setDesc(
+        createFragment((frag) => {
+          frag.appendText(
+            "A ",
+          );
+          frag.createEl("code", { text: "duckdb" });
+          frag.appendText(
+            " query can read files from your vault (e.g. read_csv('data/sales.csv')). The whole file is loaded into memory in the Obsidian process, so above this cap the query is refused — a file large enough to run out of memory can crash the window and lose unsaved edits. For large data, query a URL (httpfs) or MotherDuck instead. Set 0 to disable the limit.",
+          );
+        }),
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("1024")
+          .setValue(String(this.plugin.settings.maxLocalFileMB))
+          .onChange(async (v) => {
+            const n = parseInt(v, 10);
+            if (!Number.isNaN(n) && n >= 0) {
+              this.plugin.settings.maxLocalFileMB = Math.floor(n);
+              await this.plugin.saveSettings();
+            }
+          }),
+      );
+
     let duckdbStatusEl: HTMLSpanElement;
     new Setting(this.containerEl)
       .setName("Test DuckDB connection")
