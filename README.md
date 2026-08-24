@@ -49,7 +49,7 @@ The plugin reads the file through Obsidian's vault API (so it also works on mobi
 
 Limits worth knowing:
 
-- **The whole file is loaded into memory** in the Obsidian process. There's a size cap — *Settings → Max local file size* (default 1024 MB); above it the query is refused, because exhausting memory can crash the window. For larger data, read it over a **URL** (`https://…`, range-read by httpfs, nothing held whole) or push it to **MotherDuck**.
+- **The referenced files are loaded into memory** in the Obsidian process while the query runs. There's a combined size cap — *Settings → Max local query data* (default 1024 MB); above it the query is refused before any file is read, because exhausting memory can crash the window. For larger data, read it over a **URL** (`https://…`, range-read by httpfs, nothing held whole) or push it to **MotherDuck**.
 - **Globs** (`data/*.csv`) and **absolute paths outside the vault** aren't handled by the vault bridge. Use a URL for those, or the read-only [DuckDB file path](#connections) setting for an on-disk `.duckdb` database.
 - Cloud (`motherduck`) blocks don't read vault files — that would mean uploading. Keep local files on `duckdb`.
 
@@ -139,7 +139,7 @@ From the command palette:
 - **Scheduled refresh**: see the next section.
 - **General → Row cap**: max rows rendered inline or written into a frozen table. The runtime stops scanning at `rowCap + 1` rows and discards the rest, so heavy queries (`FROM 'huge.csv'`) don't materialize 40k rows in WASM heap just to throw 39 900 of them away. A truncation notice is appended if more rows existed.
 - **General → Cell character cap**: max characters per cell in rendered and frozen tables; longer values are truncated with an ellipsis. Hover a truncated cell in the live result to see the full value. Default `80`.
-- **DuckDB → Max local file size (MB)**: cap on a vault file a `duckdb` query will load into memory (default `1024`). Above it the query is refused — see [Reading files from your vault](#reading-files-from-your-vault). Set `0` to disable the limit (you accept the out-of-memory risk).
+- **DuckDB → Max local query data (MB)**: cap on the combined vault files a `duckdb` query will load into memory (default `1024`). Above it the query is refused before reading any file — see [Reading files from your vault](#reading-files-from-your-vault). Set `0` to disable the limit (you accept the out-of-memory risk).
 
 ## Scheduled refresh
 
@@ -220,7 +220,7 @@ Queries run locally (`duckdb` blocks) or against your MotherDuck account (`mothe
 ## Known limitations
 
 - **No mobile validation**, the architecture should work in mobile Obsidian for `:memory:` and OPFS modes (vault-file reads use the cross-platform vault API and should work on mobile too), but hasn't been tested on iOS/Android. Absolute-path mode requires Node integration which isn't available on mobile.
-- **Vault-file reads are size-capped and in-memory**: the file is loaded whole into the renderer, so large files are refused above *Max local file size*. Globs and absolute paths outside the vault aren't supported through the vault bridge — use a URL or MotherDuck. See [Reading files from your vault](#reading-files-from-your-vault).
+- **Vault-file reads are size-capped and in-memory**: referenced files are loaded into the renderer while the query runs, so queries above the combined *Max local query data* limit are refused. Globs and absolute paths outside the vault aren't supported through the vault bridge — use a URL or MotherDuck. See [Reading files from your vault](#reading-files-from-your-vault).
 - **Read-only for on-disk files**, pointing at a real `.duckdb` file lets you query it, but writes (`CREATE` / `INSERT` / `UPDATE`) succeed only inside the worker and don't persist back to the file.
 - **Scheduled refresh runs only while Obsidian is open.** If you want notes refreshed while your laptop is asleep or Obsidian is closed, you need an external trigger (e.g. cron + the Obsidian CLI calling the plugin's API).
 - **No keychain integration for the MotherDuck token**, stored plaintext in `data.json`. See *Security*.

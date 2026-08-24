@@ -183,4 +183,4 @@ GROUP BY 1
 ORDER BY people DESC
 ```
 
-> The whole file is loaded into memory in the Obsidian process, so there's a size cap (**Settings → Max local file size**, default 1024 MB). For larger data, read it over a URL (httpfs) or push it to MotherDuck. Globs (`data/*.csv`) and absolute paths outside the vault aren't supported here — use a URL or the read-only DuckDB file path for those.
+> Referenced files are loaded into memory in the Obsidian process while the query runs, so there's a combined size cap (**Settings → Max local query data**, default 1024 MB). For larger data, read it over a URL (httpfs) or push it to MotherDuck. Globs (`data/*.csv`) and absolute paths outside the vault aren't supported here — use a URL or the read-only DuckDB file path for those.

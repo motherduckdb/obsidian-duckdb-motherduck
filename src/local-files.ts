@@ -5,10 +5,10 @@
 // Obsidian app and runtime are in scope. Kept separate so it's unit-testable
 // without an Obsidian or WASM environment.
 
-// File-reading table functions DuckDB exposes. We only look at the FIRST
+// File-reading table functions DuckDB exposes. We only look at the first
 // single-quoted argument; list forms (`read_csv(['a.csv','b.csv'])`) and globs
 // are intentionally out of scope for v1 (see isVaultCandidate).
-const READER_FNS = [
+const READER_FNS = new Set([
   "read_csv",
   "read_csv_auto",
   "read_parquet",
@@ -16,27 +16,145 @@ const READER_FNS = [
   "read_json_auto",
   "read_ndjson",
   "read_ndjson_auto",
-].join("|");
+]);
 
-const READER_RE = new RegExp(`\\b(?:${READER_FNS})\\s*\\(\\s*'([^']+)'`, "gi");
-// Bare `FROM 'file.parquet'` — DuckDB infers the reader from the extension.
-const FROM_RE = /\bfrom\s+'([^']+)'/gi;
+type SqlToken =
+  | { kind: "word"; value: string }
+  | { kind: "string"; value: string }
+  | { kind: "punct"; value: string };
 
-// Extract candidate file path literals from a query, de-duplicated in first-seen
-// order. Returns the raw literal exactly as written so the caller can register
-// the bytes under that same name and the SQL runs unchanged.
+function isWordStart(c: string): boolean {
+  return /[A-Za-z_]/.test(c);
+}
+
+function isWordPart(c: string): boolean {
+  return /[A-Za-z0-9_$]/.test(c);
+}
+
+// Tokenize only the SQL shapes needed for file extraction. Comments, quoted
+// identifiers, and dollar-quoted strings are skipped so text that merely
+// mentions `read_csv('x.csv')` cannot trigger a vault read. SQL strings are
+// decoded (`'O''Brien.csv'` -> `O'Brien.csv`) because DuckDB resolves the
+// decoded filename, not the source spelling.
+function tokenizeSql(sql: string): SqlToken[] {
+  const tokens: SqlToken[] = [];
+  let i = 0;
+
+  while (i < sql.length) {
+    const c = sql[i];
+
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+
+    if (c === "-" && sql[i + 1] === "-") {
+      i += 2;
+      while (i < sql.length && sql[i] !== "\n") i++;
+      continue;
+    }
+
+    if (c === "/" && sql[i + 1] === "*") {
+      i += 2;
+      let depth = 1;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === "/" && sql[i + 1] === "*") {
+          depth++;
+          i += 2;
+        } else if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
+
+    if (c === "'") {
+      let value = "";
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === "'" && sql[i + 1] === "'") {
+          value += "'";
+          i += 2;
+        } else if (sql[i] === "'") {
+          i++;
+          break;
+        } else {
+          value += sql[i];
+          i++;
+        }
+      }
+      tokens.push({ kind: "string", value });
+      continue;
+    }
+
+    if (c === '"') {
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === '"' && sql[i + 1] === '"') i += 2;
+        else if (sql[i] === '"') {
+          i++;
+          break;
+        } else i++;
+      }
+      continue;
+    }
+
+    if (c === "$") {
+      const opener = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
+      if (opener) {
+        const close = sql.indexOf(opener, i + opener.length);
+        i = close === -1 ? sql.length : close + opener.length;
+        continue;
+      }
+    }
+
+    if (isWordStart(c)) {
+      const start = i++;
+      while (i < sql.length && isWordPart(sql[i])) i++;
+      tokens.push({ kind: "word", value: sql.slice(start, i).toLowerCase() });
+      continue;
+    }
+
+    tokens.push({ kind: "punct", value: c });
+    i++;
+  }
+
+  return tokens;
+}
+
+// Extract decoded file path literals from a query, de-duplicated in first-seen
+// order. Registering bytes under the decoded name matches the filename DuckDB
+// resolves from the SQL string.
 export function extractFileLiterals(sql: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const re of [READER_RE, FROM_RE]) {
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(sql)) !== null) {
-      const lit = m[1];
-      if (!seen.has(lit)) {
-        seen.add(lit);
-        out.push(lit);
-      }
+  const tokens = tokenizeSql(sql);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    let literal: string | undefined;
+    if (
+      token.kind === "word" &&
+      READER_FNS.has(token.value) &&
+      tokens[i + 1]?.kind === "punct" &&
+      tokens[i + 1].value === "(" &&
+      tokens[i + 2]?.kind === "string"
+    ) {
+      literal = tokens[i + 2].value;
+    } else if (
+      token.kind === "word" &&
+      token.value === "from" &&
+      tokens[i + 1]?.kind === "string"
+    ) {
+      literal = tokens[i + 1].value;
+    }
+
+    if (literal !== undefined && !seen.has(literal)) {
+      seen.add(literal);
+      out.push(literal);
     }
   }
   return out;
@@ -46,8 +164,8 @@ export function extractFileLiterals(sql: string): string[] {
 // only vault-relative data files. Everything else is left for DuckDB to resolve
 // itself:
 //   - `scheme://...`  remote/OPFS URLs go through httpfs, no local copy needed.
-//   - absolute paths  (`/x`, `C:\x`) are real disk files, handled by the
-//                     read-only DB-file path, not the vault bridge.
+//   - absolute paths  (`/x`, `C:\x`) point outside the vault and aren't exposed
+//                     to DuckDB-Wasm by this bridge.
 //   - globs           (`*`, `?`, `[`) expand inside the engine over its VFS;
 //                     a single registered buffer can't satisfy them. Out of
 //                     scope for v1; left to error clearly.

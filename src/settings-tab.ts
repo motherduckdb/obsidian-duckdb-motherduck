@@ -64,7 +64,7 @@ export class SettingsTab extends PluginSettingTab {
       );
 
     new Setting(this.containerEl)
-      .setName("Max local file size (MB)")
+      .setName("Max local query data (MB)")
       .setDesc(
         createFragment((frag) => {
           frag.appendText(
@@ -72,7 +72,7 @@ export class SettingsTab extends PluginSettingTab {
           );
           frag.createEl("code", { text: "duckdb" });
           frag.appendText(
-            " query can read files from your vault (e.g. read_csv('data/sales.csv')). The whole file is loaded into memory in the Obsidian process, so above this cap the query is refused — a file large enough to run out of memory can crash the window and lose unsaved edits. For large data, query a URL (httpfs) or MotherDuck instead. Set 0 to disable the limit.",
+            " query can read files from your vault (e.g. read_csv('data/sales.csv')). The referenced files are loaded into memory in the Obsidian process, so a query whose combined file size exceeds this cap is refused — exhausting memory can crash the window and lose unsaved edits. For large data, query a URL (httpfs) or MotherDuck instead. Set 0 to disable the limit.",
           );
         }),
       )

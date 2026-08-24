@@ -32,6 +32,10 @@ export class MotherDuckRuntime implements Runtime {
     // intentionally empty — see comment above
   }
 
+  async dropFile(): Promise<void> {
+    // Local vault files are never registered on the cloud runtime.
+  }
+
   async runQuery(sql: string, rowCap?: number): Promise<QueryResult> {
     if (!this.connection) await this.init();
 

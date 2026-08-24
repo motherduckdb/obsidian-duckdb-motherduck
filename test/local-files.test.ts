@@ -47,6 +47,31 @@ test("extractFileLiterals ignores non-file string literals", () => {
   );
 });
 
+test("extractFileLiterals ignores comments and quoted examples", () => {
+  const sql = `
+    -- read_csv('line-comment.csv')
+    /* read_parquet('block-comment.parquet') */
+    SELECT $$read_json('dollar-quoted.json')$$ AS example,
+           'read_csv(''ordinary-string.csv'')' AS another
+    FROM read_csv/* an inline comment */('real.csv')
+  `;
+  assert.deepEqual(extractFileLiterals(sql), ["real.csv"]);
+});
+
+test("extractFileLiterals decodes escaped apostrophes in paths", () => {
+  assert.deepEqual(
+    extractFileLiterals("SELECT * FROM read_csv('data/O''Brien.csv')"),
+    ["data/O'Brien.csv"],
+  );
+});
+
+test("extractFileLiterals preserves SQL order across reader and bare FROM forms", () => {
+  assert.deepEqual(
+    extractFileLiterals("FROM 'first.parquet' UNION ALL FROM read_csv('second.csv')"),
+    ["first.parquet", "second.csv"],
+  );
+});
+
 test("isVaultCandidate accepts vault-relative data paths", () => {
   assert.equal(isVaultCandidate("data/sales.csv"), true);
   assert.equal(isVaultCandidate("sales.csv"), true);

@@ -212,7 +212,7 @@ export default class MotherDuckPlugin extends Plugin {
 
     const adapter = this.app.vault.adapter;
     const capBytes = this.settings.maxLocalFileMB * 1024 * 1024;
-    const out: Array<{ name: string; bytes: Uint8Array }> = [];
+    const resolvedFiles: Array<{ literal: string; resolved: string; size: number }> = [];
 
     for (const literal of literals) {
       let resolved: string | null = null;
@@ -225,28 +225,34 @@ export default class MotherDuckPlugin extends Plugin {
       if (!resolved) continue; // not a vault file — let DuckDB try (URL/error)
 
       const stat = await adapter.stat(resolved);
-      const size = stat?.size ?? 0;
-      if (capBytes > 0 && size > capBytes) {
-        const mb = (size / (1024 * 1024)).toFixed(0);
-        throw new Error(
-          `Local file '${literal}' is ${mb} MB, over the ${this.settings.maxLocalFileMB} MB limit. ` +
-            `It would be loaded fully into memory. Raise "Max local file size" in settings, ` +
-            `or query it via a URL (httpfs) or MotherDuck instead.`,
-        );
-      }
-      if (size > LOCAL_FILE_WARN_MB * 1024 * 1024) {
-        new Notice(
-          `Loading ${(size / (1024 * 1024)).toFixed(0)} MB '${literal}' into memory…`,
-        );
-      }
-
-      const buf = await adapter.readBinary(resolved);
-      // Register under the exact literal the user wrote, so their SQL runs
-      // unchanged (DuckDB resolves registered names before the filesystem).
-      out.push({ name: literal, bytes: new Uint8Array(buf) });
+      resolvedFiles.push({ literal, resolved, size: stat?.size ?? 0 });
     }
 
-    return out;
+    // Gate the aggregate before reading any bytes. A per-file cap still allows
+    // several individually-valid files to exhaust the renderer together.
+    const totalSize = resolvedFiles.reduce((sum, file) => sum + file.size, 0);
+    if (capBytes > 0 && totalSize > capBytes) {
+      const mb = (totalSize / (1024 * 1024)).toFixed(0);
+      throw new Error(
+        `Local files for this query total ${mb} MB, over the ${this.settings.maxLocalFileMB} MB limit. ` +
+          `They would be loaded fully into memory. Raise "Max local query data" in settings, ` +
+          `or query via a URL (httpfs) or MotherDuck instead.`,
+      );
+    }
+    if (totalSize > LOCAL_FILE_WARN_MB * 1024 * 1024) {
+      new Notice(
+        `Loading ${(totalSize / (1024 * 1024)).toFixed(0)} MB of local query data into memory…`,
+      );
+    }
+
+    return Promise.all(
+      resolvedFiles.map(async ({ literal, resolved }) => {
+        const buf = await adapter.readBinary(resolved);
+        // Register under the decoded SQL literal, which is the filename DuckDB
+        // resolves after parsing the query.
+        return { name: literal, bytes: new Uint8Array(buf) };
+      }),
+    );
   }
 
   startScheduler() {

@@ -24,10 +24,12 @@ export interface Runtime {
   /**
    * Make a file's bytes queryable under `name`, so SQL like
    * `read_csv('<name>')` reads from these bytes instead of the host
-   * filesystem (which WASM can't reach). The bytes stay resident until the
-   * runtime is closed; re-registering the same name replaces them.
+   * filesystem (which WASM can't reach). The bytes stay resident until
+   * `dropFile` is called or the runtime is closed.
    */
   registerFile(name: string, bytes: Uint8Array): Promise<void>;
+  /** Release a file previously registered with `registerFile`. */
+  dropFile(name: string): Promise<void>;
   close(): Promise<void>;
   label(): string;
 }

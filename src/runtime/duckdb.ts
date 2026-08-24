@@ -151,6 +151,11 @@ export class DuckDBWasmRuntime implements Runtime {
     await this.db!.registerFileBuffer(name, bytes);
   }
 
+  async dropFile(name: string): Promise<void> {
+    if (!this.db) return;
+    await this.db.dropFile(name);
+  }
+
   async runQuery(sql: string, rowCap?: number): Promise<QueryResult> {
     if (!this.conn) await this.init();
 
