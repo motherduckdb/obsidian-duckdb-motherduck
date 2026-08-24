@@ -141,6 +141,21 @@ export class DuckDBWasmRuntime implements Runtime {
     this.conn = await this.db.connect();
   }
 
+  // Register a file's bytes into DuckDB-Wasm's virtual filesystem under `name`.
+  // No parsing happens here — the bytes sit in the worker and DuckDB range-reads
+  // them when a query references `name`, so a Parquet still gets column/row-group
+  // pruning. The whole file is resident in memory though; the caller is
+  // responsible for gating size before reading it in.
+  async registerFile(name: string, bytes: Uint8Array): Promise<void> {
+    if (!this.db) await this.init();
+    await this.db!.registerFileBuffer(name, bytes);
+  }
+
+  async dropFile(name: string): Promise<void> {
+    if (!this.db) return;
+    await this.db.dropFile(name);
+  }
+
   async runQuery(sql: string, rowCap?: number): Promise<QueryResult> {
     if (!this.conn) await this.init();
 

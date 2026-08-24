@@ -1,4 +1,5 @@
 import { DuckDBWasmRuntime } from "./duckdb";
+import { withRegisteredFiles, type RegisteredFile } from "./file-registration";
 import { MotherDuckRuntime } from "./motherduck";
 import type { Row, Runtime } from ".";
 import type { Connection, QueryRunResult, Settings } from "../types";
@@ -52,10 +53,20 @@ export class RuntimeManager {
     sql: string,
     connection: Connection,
     rowCap?: number,
+    files?: ReadonlyArray<RegisteredFile>,
   ): Promise<QueryRunResult> {
     return this.enqueueQuery(connection, async () => {
       const rt = await this.getRuntime(connection);
-      return rt.runQuery(sql, rowCap);
+      // Register inside the same queue slot as the query so a concurrent query
+      // on this connection can't run between registration and use.
+      return withRegisteredFiles(
+        rt,
+        files ?? [],
+        () => rt.runQuery(sql, rowCap),
+        (name, e) => {
+          console.error(`[motherduck] failed to release registered file '${name}'`, e);
+        },
+      );
     });
   }
 

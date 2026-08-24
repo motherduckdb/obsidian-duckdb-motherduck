@@ -17,7 +17,12 @@ import { asDuckDbFrontmatter, type Connection, type DuckDbFrontmatter, type Quer
 export interface QueryBlockHost {
   app: App;
   settings: Settings;
-  runQuery(sql: string, connection: Connection, rowCap?: number): Promise<QueryRunResult>;
+  runQuery(
+    sql: string,
+    connection: Connection,
+    rowCap?: number,
+    sourcePath?: string,
+  ): Promise<QueryRunResult>;
   freezeRenderedBlock(
     ctx: MarkdownPostProcessorContext,
     el: HTMLElement,
@@ -158,6 +163,7 @@ export function renderQueryBlock(
           sql,
           connection,
           host.settings.rowCap,
+          ctx.sourcePath,
         );
         const dt = Math.round(performance.now() - t0);
         const rowsLabel = truncated ? `${rows.length}+ row(s)` : `${rows.length} row(s)`;

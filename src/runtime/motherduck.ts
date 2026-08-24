@@ -24,6 +24,18 @@ export class MotherDuckRuntime implements Runtime {
     await this.connection.isInitialized();
   }
 
+  // Local vault files aren't bridged to the cloud connection — querying them
+  // would mean uploading, which the `motherduck` block doesn't do. No-op so the
+  // shared runQuery path can call this unconditionally; the file literal is left
+  // for MotherDuck to resolve (and error on) itself.
+  async registerFile(): Promise<void> {
+    // intentionally empty — see comment above
+  }
+
+  async dropFile(): Promise<void> {
+    // Local vault files are never registered on the cloud runtime.
+  }
+
   async runQuery(sql: string, rowCap?: number): Promise<QueryResult> {
     if (!this.connection) await this.init();
 
